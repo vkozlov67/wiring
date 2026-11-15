@@ -1,0 +1,2 @@
+# Python scripts support builds, tests, and maintenance.
+*.py -linguist-detectable
