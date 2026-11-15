@@ -1,7 +1,7 @@
 **
 !/*.py
 !/package*.json
-!/requirements.txt
+!/requirements-build.txt
 !/tsconfig.json
 !/vite*.ts
 !/src/**
@@ -12,6 +12,8 @@
 !/locales/**
 !/resources/**
 !/deploy/beta/**
+!/deploy/local/nginx.conf
+/deploy/beta/places/target/**
 **/.env
 **/.env.*
 **/__pycache__/**

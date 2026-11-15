@@ -117,7 +117,7 @@ mod tests {
     const MOBILE: &str = "eyJ1aWQiOjQyLCJwdyI6ImFiY2QwMTIzYWJjZDAxMjMifQ.aYAOgA.xJ88qzC8LXfQmA3SHYjS0Q2RtpU";
 
     #[test]
-    fn flask_tokens_round_trip_without_invalidating_existing_sessions() {
+    fn legacy_tokens_round_trip_without_invalidating_existing_sessions() {
         let keys = SessionKeys::new(b"local-synthetic-fixture-key");
         let claims = keys.read_web(WEB, NOW).unwrap();
         assert_eq!(claims["uid"], 42);

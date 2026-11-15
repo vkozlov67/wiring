@@ -3,7 +3,7 @@
 ## Before changing code
 
 1. Read `README.md` and `docs/architecture.md`.
-2. Identify whether the change belongs to Flask, the legacy shell, or a Preact feature.
+2. Identify whether the change belongs to the Rust server, the legacy shell, or a Preact feature.
 3. Preserve the current URL contract and the PostgreSQL-only runtime.
 4. Never use production accounts, secrets, or destructive database commands for local checks.
 
@@ -11,13 +11,13 @@
 
 | Area | Source of truth | Rule |
 |---|---|---|
-| Server/API | `app.py`, domain modules, `database.py` | Keep HTTP handlers thin when extracting new domain code. |
+| Server/API | `deploy/beta/places/src/` and PostgreSQL schema | Keep HTTP handlers thin when extracting new domain code. |
 | SPA shell | `src/app/bootstrap.js` | Coordinator-only: routing, session state, API orchestration, and host bridges. Do not add screen markup here. |
 | Shared client API | `src/app/api.ts` | Use the shared client and preserve same-origin credentials. |
 | Inbox lifecycle | `src/app/inbox.ts` | Keep polling, badges, notices, and browser notifications here. |
 | Preact UI | `src/features/<name>/` | Put screen logic, types, and feature styles together. |
 | Shared UI | `src/components/ui/` | Reuse `Modal`, `Button`, `AppHeader`, and primitives before adding markup. |
-| Routing | `src/router/` | A new SPA path requires updates to Flask, route definitions, and router tests. |
+| Routing | `src/router/` | A new SPA path requires updates to Rust, route definitions, and router tests. |
 | Global styles | `public/styles.css` | Legacy compatibility surface. New Preact UI should prefer CSS Modules. |
 | Static output | `public/dist/` | Generated; never edit or commit it. |
 
@@ -25,7 +25,7 @@
 
 - `/api/unmatch`, block, and report hide a chat by setting `messages.deleted_at`; they must not delete message rows.
 - Account deletion is a separate lifecycle and may purge auxiliary data after the documented retention period.
-- Use parameterized SQL through the existing database wrapper.
+- Use parameterized SQL through the Rust PostgreSQL client.
 - Do not introduce SQLite, an ORM, or a second state store without an explicit architecture decision.
 
 ## Site and mobile apps are one product
@@ -52,10 +52,10 @@ Run the narrowest relevant checks while iterating, then the full set before hand
 npm run typecheck
 npm run build
 npm run test:router
-python3 -m unittest discover -s tests -q
+./scripts/test-api.sh
 ```
 
-`./scripts/test.sh` is the CI-equivalent command and requires PostgreSQL on the configured test port.
+`./scripts/test.sh` is the CI-equivalent command and starts an isolated PostgreSQL instance with Docker Compose.
 
 ## Documentation rule
 

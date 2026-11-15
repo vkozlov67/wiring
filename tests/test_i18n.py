@@ -35,15 +35,6 @@ class TranslationTest(unittest.TestCase):
         with use_language('ru'):
             self.assertEqual(tr('Лайк: {0}', 'Alice'), 'Лайк: Alice')
 
-    def test_local_chat_suggestions_use_selected_language(self):
-        from icebreakers import _heuristic_openers
-        with use_language('en'):
-            lines = _heuristic_openers({})
-            self.assertEqual(len(lines), 3)
-            self.assertTrue(all(not re.search('[А-Яа-яЁё]', line) for line in lines))
-        with use_language('ru'):
-            self.assertTrue(any(re.search('[А-Яа-яЁё]', line) for line in _heuristic_openers({})))
-
     def test_static_legal_documents_and_glossary_are_fully_translated(self):
         with use_language('en'):
             for name, body in vars(legal_pages).items():

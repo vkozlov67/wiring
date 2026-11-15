@@ -1,22 +1,104 @@
-# Local dev Postgres (same major version as prod). Not for production.
+name: wiring-local
+
+x-rust-build: &rust-build
+  context: .
+  dockerfile: deploy/beta/Dockerfile
+
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: wiring-postgres-dev
     environment:
-      POSTGRES_USER: wiring_dev
-      POSTGRES_PASSWORD: wiring_dev
-      POSTGRES_DB: wiring_dev
-    ports:
-      # Host 5433 avoids clashing with a system Postgres on 5432.
-      - "5433:5432"
+      POSTGRES_USER: wiring_local
+      POSTGRES_PASSWORD: wiring-local-only
+      POSTGRES_DB: wiring_local
     volumes:
-      - wiring_pg_data:/var/lib/postgresql/data
+      - database:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U wiring_dev -d wiring_dev"]
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "wiring_local", "-d", "wiring_local"]
       interval: 2s
-      timeout: 5s
+      timeout: 3s
       retries: 30
 
+  schema:
+    build:
+      <<: *rust-build
+      target: places
+    environment:
+      WIRING_SCHEMA_DATABASE_URL: postgresql://wiring_local:wiring-local-only@postgres:5432/wiring_local
+    command: ["/usr/local/bin/wiring-beta-places", "init-schema"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  fixtures:
+    image: postgres:16-alpine
+    volumes:
+      - ./deploy/local/fixtures.sql:/fixtures.sql:ro
+    command: ["psql", "-X", "-v", "ON_ERROR_STOP=1", "postgresql://wiring_local:wiring-local-only@postgres:5432/wiring_local", "-f", "/fixtures.sql"]
+    depends_on:
+      schema:
+        condition: service_completed_successfully
+
+  rust:
+    build:
+      <<: *rust-build
+      target: local-runtime
+    env_file: deploy/local/rust.env
+    environment:
+      SITE_URL: http://127.0.0.1:${WIRING_LOCAL_PORT:-5070}
+      APP_SECRET_KEY: ${WIRING_LOCAL_SESSION_KEY:?set the local session key via scripts/dev.sh or scripts/test-api.sh}
+      ADMIN_TOKEN: ${WIRING_LOCAL_ADMIN_TOKEN:?set the local admin token via scripts/dev.sh or scripts/test-api.sh}
+      WIRING_GOOGLE_OAUTH_ENABLED: ${WIRING_LOCAL_GOOGLE_OAUTH_ENABLED:-0}
+      GOOGLE_CLIENT_ID: local-test-client.apps.googleusercontent.com
+      GOOGLE_CLIENT_SECRET: synthetic-oauth-value
+    volumes:
+      - media:/state
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:5082/health"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    depends_on:
+      fixtures:
+        condition: service_completed_successfully
+
+  proxy:
+    build:
+      <<: *rust-build
+      target: local-proxy
+    ports:
+      - "127.0.0.1:${WIRING_LOCAL_PUBLISHED_PORT:-5070}:80"
+    volumes:
+      - media:/state:ro
+    networks: [default, ingress]
+    depends_on:
+      rust:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/health"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  api-tests:
+    profiles: [test]
+    build:
+      <<: *rust-build
+      target: api-test
+    environment:
+      WIRING_HTTP_TEST_ORIGIN: http://proxy
+      WIRING_HTTP_TEST_HOST: 127.0.0.1:${WIRING_LOCAL_PORT:-5070}
+      WIRING_HTTP_TEST_DB: postgresql://wiring_local:wiring-local-only@postgres:5432/wiring_local
+      WIRING_HTTP_TEST_ADMIN: ${WIRING_LOCAL_ADMIN_TOKEN:?set the local admin token}
+    depends_on:
+      proxy:
+        condition: service_healthy
+
+networks:
+  default:
+    internal: true
+  ingress: {}
+
 volumes:
-  wiring_pg_data:
+  database:
+  media:

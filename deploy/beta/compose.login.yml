@@ -1,8 +1,0 @@
-services:
-  edge:
-    volumes:
-      - ./Caddyfile.login:/etc/caddy/Caddyfile:ro
-  places:
-    image: wiring-beta-places:public-login
-    environment:
-      WIRING_PUBLIC_PASSWORD_LOGIN: "1"

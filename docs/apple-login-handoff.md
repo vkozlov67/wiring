@@ -13,7 +13,7 @@
 
 ## Что готово в этой ветке
 
-`social_auth.py` поддерживает провайдер `apple` в общем `/api/auth/providers` и `POST /api/auth/apple/start`. На сайте кнопки «Войти через Apple» и «Зарегистрироваться через Apple» появляются при наличии `APPLE_CLIENT_ID` и `APPLE_CLIENT_SECRET`.
+Rust поддерживает провайдер `apple` в общем `/api/auth/providers` и `POST /api/auth/apple/start`. На сайте кнопки «Войти через Apple» и «Зарегистрироваться через Apple» появляются при наличии `APPLE_CLIENT_ID` и `APPLE_CLIENT_SECRET`.
 
 Apple использует code flow с `response_mode=form_post` и nonce. Сервер обменивает code и проверяет подпись ID token по Apple JWKS, issuer, Services ID audience, срок, nonce и подтверждённую почту. Добавлена зависимость `PyJWT[crypto]`; установить обновлённый `requirements.txt`.
 

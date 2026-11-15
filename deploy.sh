@@ -25,8 +25,6 @@ test "$(uname -m)" = x86_64
 test -L /opt/wiring-places/current
 test -d /var/www/wiring-static
 systemctl is-active --quiet wiring-places.service
-test "$(systemctl show -p ActiveState --value wiring.service)" = inactive
-test "$(systemctl show -p UnitFileState --value wiring.service)" = disabled
 mktemp -d /opt/wiring-places/releases/release.XXXXXXXX
 REMOTE
 )

@@ -1,9 +1,0 @@
-services:
-  edge:
-    volumes:
-      - ./Caddyfile.inbox:/etc/caddy/Caddyfile:ro
-  places:
-    image: wiring-beta-places:public-inbox
-    environment:
-      WIRING_PUBLIC_INBOX: "1"
-      SESSION_COOKIE_SECURE: "1"

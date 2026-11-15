@@ -1,6 +1,6 @@
 import type { ViewId } from "@/router/types";
 
-/** Canonical SPA paths (must match Flask `@app.get` in app.py). */
+/** Canonical SPA paths (must match the Rust route list in spa_http.rs). */
 export const SPA_PATHS = {
   home: "/",
   login: "/sign-in",

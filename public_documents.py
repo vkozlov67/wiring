@@ -1,4 +1,4 @@
-"""Editorial content and public link metadata shared by Flask and release builds."""
+"""Editorial content and public link metadata used by release builds."""
 from glossary import glossary_html
 from legal_pages import ACCOUNT_DELETION_HTML, CHILD_SAFETY_HTML, LEGAL_INDEX_HTML, MARKETING_HTML, PRIVACY_HTML, RULES_HTML
 

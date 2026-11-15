@@ -11,10 +11,13 @@ esac
 
 failed=0
 if $expect_stopped; then
-  if [[ "$(systemctl show -p ActiveState --value wiring.service)" != inactive ||
-        "$(systemctl show -p UnitFileState --value wiring.service)" != disabled ]] ||
+  active=$(systemctl show -p ActiveState --value wiring.service)
+  load=$(systemctl show -p LoadState --value wiring.service)
+  enabled=$(systemctl show -p UnitFileState --value wiring.service)
+  if [[ "$active" != inactive ||
+        ( "$load" != not-found && "$enabled" != disabled && "$enabled" != masked ) ]] ||
      ! listeners=$(ss -ltnH 'sport = :5070') || [[ -n "$listeners" ]]; then
-    printf 'Flask must be inactive and disabled, with no listener on port 5070\n' >&2
+    printf 'Flask must be stopped and disabled or absent, with no listener on port 5070\n' >&2
     failed=1
   fi
   if ! systemctl is-active --quiet wiring-places.service; then
@@ -61,5 +64,5 @@ done
 (( failed == 0 )) || exit 1
 printf 'Both production catalogs respond; nginx has no Flask upstreams and the Rust integrations are configured.\n'
 if $expect_stopped; then
-  printf 'Flask is inactive and disabled; port 5070 has no listener.\n'
+  printf 'Flask is inactive and disabled or absent; port 5070 has no listener.\n'
 fi

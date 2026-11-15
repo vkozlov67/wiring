@@ -6,13 +6,13 @@
 
 `locales/en.json` — общий словарь исходных русских фраз и английских переводов. `src/lib/i18n.ts` переводит только строки, явно оформленные через `tr`; `{0}`, `{1}` подставляют значения без повторного перевода. `LanguageSwitch` в общей шапке и чате сохраняет `wiring-language` в localStorage/cookie и приватное `users.language` через `PATCH /api/me/language`. Выбор гостя хранится до следующего входа и применяется к вошедшему аккаунту. Остальные устройства получают предпочтение из `/api/me`. Переключение сайта перезагружает документ: существующее сохранение черновиков и фильтров продолжает работать; запись, отправка и выбранные фото блокируют перезагрузку до завершения действия.
 
-`i18n.py` выбирает язык по `X-Wiring-Language`, допустимому `?lang=ru|en`, затем cookie; по умолчанию русский. HTML получает `lang`, а JSON/HTML — `Content-Language` и Vary по источникам предпочтения. Jinja переводит только статические литералы через `_`; фильтр `localized_html` предназначен исключительно для доверенных редакционных документов и глоссария. В API каталогов переводятся только отображаемые поля, а id, значения стран/городов и пользовательские тексты остаются каноническими. Названия мест переводятся при отображении, не при сохранении фильтра или анкеты.
+Rust выбирает язык по `X-Wiring-Language`, допустимому `?lang=ru|en`, затем cookie; по умолчанию русский. HTML получает `lang`, а JSON/HTML — `Content-Language` и Vary по источникам предпочтения. При сборке `i18n.py` переводит статические литералы Jinja через `_`; фильтр `localized_html` предназначен исключительно для доверенных редакционных документов и глоссария. В API каталогов переводятся только отображаемые поля, а id, значения стран/городов и пользовательские тексты остаются каноническими. Названия мест переводятся при отображении, не при сохранении фильтра или анкеты.
 
 Генерация подсказок учитывает язык; кеш включает версию, язык и явно указанный пол обоих участников. Новые push/email используют язык получателя. Исторические уведомления переводятся только по известным системным шаблонам; имена и текст сообщений не переводятся. Проверки охватывают полноту словаря, параметры подстановки, документы, API, bearer/cookie, сохранение выбора и черновика при переключении.
 
 В `wiring-mobile` используется копия того же словаря (`scripts/sync_locales.py`), AsyncStorage и подписки React. Смена языка обновляет интерфейс без размонтирования экранов. Кеш справочника разделён по языкам; поздний ответ прежнего запроса не подменяет текущие подписи. Подписанные сборки и приёмка на устройствах выполняются отдельно.
 
-Подсказки начала переписки (`icebreakers.py`) получают явно указанный `gender` собеседника и автора отдельно. Скрытый или неизвестный пол передаётся как `hidden`; генератору предписано использовать нейтральные формулировки и не угадывать род по имени или профессии. Внутренний JSON-кеш `chat_openers.lines` хранит версию правил, нормализованные значения gender и список фраз; прежние массивы и записи с изменившимся gender обновляются при следующем обращении. API по-прежнему возвращает массив `openers`.
+Подсказки начала переписки (`chat_history_http.rs`) получают явно указанный `gender` собеседника и автора отдельно. Скрытый или неизвестный пол передаётся как `hidden`; генератору предписано использовать нейтральные формулировки и не угадывать род по имени или профессии. Внутренний JSON-кеш `chat_openers.lines` хранит версию правил, нормализованные значения gender и список фраз; прежние массивы и записи с изменившимся gender обновляются при следующем обращении. API по-прежнему возвращает массив `openers`.
 
 Админка `/admin` остаётся серверным шаблоном. `src/features/admin/AdminTabs.tsx` в существующем `server-header.js` добавляет восемь вкладок, клавиатурную навигацию, историю браузера и прокрутку таблиц; стили находятся рядом в CSS Module. Переключение сохраняет набранные ответы. Без JavaScript разделы доступны последовательно по якорным ссылкам. Счётчики показывают анкеты с автобаном, обращения в загруженном списке и задачи-кандидаты, а не непрочитанные элементы. В `wiring-mobile` нет соответствующего операторского экрана: изменений пользовательских экранов iOS/Android и `/api/*` не требуется.
 
@@ -34,7 +34,7 @@ iOS и Android — это тот же WIRING, что и сайт. Общий к�
 | Клиент | **Preact + TS** (`src/`) + shell (`src/app/`) | Vite → `public/dist/`; постепенная миграция экранов |
 | Стили | shell `public/styles.css` + CSS Modules внутри feature bundles | экранные стили не растут в глобальный файл |
 | Картинки | **`public/`** | nginx обслуживает обычные файлы, Rust обрабатывает миниатюры |
-| Python | см. `requirements.txt` | Сборка каталога и документов, локальный эталон Flask, тесты и вспомогательные скрипты |
+| Python | см. `requirements.txt` | Сборка каталога и документов, проверки переводов и вспомогательные инструменты |
 
 Фронт использует Vite только для сборки небольших entrypoint-ов и route-level bundles; тяжёлых UI-библиотек и CSS-фреймворков нет.
 
@@ -59,7 +59,7 @@ flowchart LR
 1. Почти все «страницы» (`/`, `/login`, `/feed`, `/chats/...`) — один **`templates/index.html`**: пустой `#app` + подключение собранного shell `public/dist/app.js`. На основном домене его отдаёт Rust; шаблон собирается вместе с релизом.
 2. **`src/app/bootstrap.js` — coordinator shell**: ходит в **`/api/*`**, хранит session state в памяти, синхронизирует URL через history API и передаёт typed host bridges в feature bundles. Общий API-клиент вынесен в `src/app/api.ts`, inbox-lifecycle — в `src/app/inbox.ts`, lazy-загрузка feature-бандлов — в `src/app/features.ts`; пользовательские экраны живут в Preact.
 3. Отдельные **серверные шаблоны**: `templates/admin.html`, `templates/legal.html` (правила, privacy), `templates/landing.html` (лендинг приложений `/m` со своими `public/landing.css` и `public/landing.js`). Юридические страницы в продакшене отдаёт Rust; HTML собирается из общих шаблонов и переводов. Экраны `/support` и `/notifications` вынесены в отдельные Preact-модули; настройки уведомлений живут рядом с профилем.
-4. Рабочая серверная логика находится в модулях `deploy/beta/places/src/`. Модули рядом с `app.py` сохраняют локальный эталон для проверки совместимости. Web Push добровольный: подписка только с тумблера уведомлений, доставка лайков и сообщений через `/sw.js`, независимо от открытых вкладок и недавнего polling.
+4. Рабочая серверная логика находится в модулях `deploy/beta/places/src/`. Локальный Docker Compose запускает тот же Rust-сервис с отдельной PostgreSQL. Web Push добровольный: подписка только с тумблера уведомлений, доставка лайков и сообщений через `/sw.js`, независимо от открытых вкладок и недавнего polling.
 
 ## Оценка текущей архитектуры
 
@@ -69,23 +69,22 @@ flowchart LR
 
 - **Мало движущихся частей**: один процесс приложения, одна БД, понятный деплой (`deploy.sh`).
 - **Мало зависимостей**: нет ORM, нет node_modules, нет лишних слоёв на фронте.
-- **Бэкенд уже модульный**: справочники, почта, премиум, модерация — отдельные файлы, тесты `unittest` на API и логику.
+- **Бэкенд уже модульный**: справочники, почта, премиум, модерация — отдельные файлы, интеграционные тесты Rust по HTTP.
 - **Подходит продукту**: dating-SPA с сессиями и PostgreSQL — нормальный масштаб без микросервисов.
 
 **Компромиссы (не баги, а долг)**
 
-- **`app.py` большой** — маршруты и часть бизнес-логики в одном файле; дальше новые фичи лучше не раздувать его без нужды.
 - **`src/app/bootstrap.js` всё ещё заметный** — в нём остаются routing, session state, API orchestration и host bridges; экранная разметка туда больше не добавляется.
 - **Нет отдельного API-контракта** (OpenAPI) — ок для одной команды и одного клиента.
 - **UI-граница** — новые экраны и feature-specific handlers добавляются только в `src/features/*`; `bootstrap.js` остаётся orchestration-слоем.
 - **Мигрированы в Preact** — auth, home, profile, notification settings, consents, WIRING+, likes, person, deck, account и chats. Старые screen renderers и связанные global styles удалены.
 
-Итого: архитектура **простая и уместная** для WIRING; главный риск — рост двух монолитов (`app.py`, `src/app/bootstrap.js`), его гасим **KISS** и точечным выносом, а не новым стеком.
+Итого: архитектура **простая и уместная** для WIRING; главный риск — рост координаторов (`service_http.rs`, `src/app/bootstrap.js`), его гасим **KISS** и точечным выносом, а не новым стеком.
 
 ## Принципы разработки (KISS)
 
 1. **KISS** — выбираем самое простое решение, которое закрывает задачу. Не добавляем слой (ORM, Redux, design system на npm), пока боль без него не станет явной.
-2. **Минимум зависимостей** — не тянем объёмные библиотеки, плагины и фреймворки, если можно обойтись стандартной библиотекой, Flask, DOM API или небольшим своим модулем.
+2. **Минимум зависимостей** — не тянем объёмные библиотеки, плагины и фреймворки, если можно обойтись стандартной библиотекой, Axum, DOM API или небольшим своим модулем.
 3. **Новая зависимость — только с причиной** — в PR/задаче коротко: зачем, почему не stdlib/существующий код, что с размером и обновлениями.
 4. **Один клиент, один сервер** — API под текущий SPA; отдельный mobile/API-клиент — отдельное решение, не «на будущее» в коде.
 5. **PostgreSQL** на проде, в local dev и тестах (`DATABASE_URL`, `docker compose`).
@@ -96,7 +95,7 @@ flowchart LR
 
 | Что | Куда |
 |-----|------|
-| HTTP API, сессии | `app.py` или новый модуль + импорт в `app.py` |
+| HTTP API, сессии | `service_http.rs` и отдельные доменные модули Rust |
 | Справочники, тексты каталога | `catalog.py`, `cities.py`, … |
 | Разметка нового экрана | `src/features/<name>/` на Preact |
 | Shell-стили и server-template compatibility | `public/styles.css` |
@@ -127,7 +126,7 @@ Mobile follow-up (`mobile/` is absent): apply the same one-card vertical gesture
 
 `src/lib/usePhotoSwipe.ts` locks the first clear pointer axis for both deck and person galleries. Horizontal swipes change only the photo; vertical touch gestures are handled by the deck viewport, while person-page scrolling stays native. Vertical mouse drags on a deck card delegate to feed navigation. Interactive elements are excluded from gesture capture and completed drags suppress accidental clicks. Numbered photo buttons/thumbnails and Left/Right keys provide alternatives; the deck announces the current photo and moves focus out of a card when it becomes inactive. A shared Button link in the external action panel is the only profile-opening control for each card. Person photos also retain their natural proportions; reduced motion disables the gallery entrance animation.
 
-`GET /api/feed` accepts `limit` (1–30, default 30), returns `cards` and `has_more`, and sends `Cache-Control: no-store`. `feed.py` reserves eligible candidates in random order in PostgreSQL `feed_history`, with a unique `(user_id, other_id)` pair. Locking the viewer row serializes concurrent page requests. Mutual «кого ищу» / «кого ищет», deck filters, blocks and privacy checks apply before reservation (viewer-only matching for QA demo emails). The additive `init_db` migration is idempotent and backfills historical passes.
+`GET /api/feed` accepts `limit` (1–30, default 30), returns `cards` and `has_more`, and sends `Cache-Control: no-store`. `feed_write.rs` reserves eligible candidates in random order in PostgreSQL `feed_history`, with a unique `(user_id, other_id)` pair. Locking the viewer row serializes concurrent page requests. Mutual «кого ищу» / «кого ищет», deck filters, blocks and privacy checks apply before reservation (viewer-only matching for QA demo emails). The additive `init_db` migration is idempotent and backfills historical passes.
 
 Chat messages can be answered, edited by the sender, or soft-deleted by the sender (`deleted_at`, media file removed). A rightward swipe on a bubble starts a reply; edit and delete open from a long-press or right-click, with reply and copy in that same menu, so they are not shown under every message. Desktop hover and keyboard focus still expose a reply button. Voice transcription stays a visible action. A voice note is an audio file on the message. «Расшифровать» calls OpenAI transcription once when `OPENAI_API_KEY` is set and stores `transcript`. The text is returned only to that request and is not included in the thread, so the other person still sees the voice note until they press the button. Replying switches the chat header to «Ответить».
 
@@ -151,7 +150,7 @@ The typed shared API resets and then fetches the first new page. Cancel does not
 
 `/for-you` uses `src/features/recommendations/RecommendationsScreen.tsx`, sharing the Preact deck cards, gestures and explicit actions. `bootstrap.js` coordinates the typed host and conditional navigation. Any real account may redeem `WIRINGFORYOU` via the existing `POST /api/premium/redeem`, then opt in with persisted `users.jev_feed_enabled`. A separate additive `users.jev_recommendations_unlocked` flag is required by the API, toggle and navigation. `JEV_BETA_USER_ID` no longer grants access, including for the former beta account. `POST /api/me/jev-feed` retains its contract. No billing tier is introduced. Ordinary `/api/feed` no longer invokes Jev.
 
-`GET /api/recommendations` is authenticated, real-account-only and opt-in-only. `recommendations.py` scans candidates by primary-key batches of 256 across the whole population, without random sampling, temporary feed filters, or feed-history reservations. SQL excludes outgoing swipes, permanent history exclusions, deleted/paused profiles and missing photos. The existing eligibility callback checks blocks, snoozes, incognito, published profile completeness, mutual gender preferences and both owners' discovery restrictions (age, place). Worldwide discovery does not override a person's visibility controls.
+`GET /api/recommendations` is authenticated, real-account-only and opt-in-only. `recommendations_http.rs` scans candidates by primary-key batches of 256 across the whole population, without random sampling, temporary feed filters, or feed-history reservations. SQL excludes outgoing swipes, permanent history exclusions, deleted/paused profiles and missing photos. The existing eligibility callback checks blocks, snoozes, incognito, published profile completeness, mutual gender preferences and both owners' discovery restrictions (age, place). Worldwide discovery does not override a person's visibility controls.
 
 A heap keeps at most 60 eligible profiles by deterministic structured-signal priority (shared vibe, intents, tags, same city and age band); Jev ranks that shortlist in one bounded request with the existing four-second provider timeout. Memory is bounded by the batch and shortlist. Every refresh scans again, so privacy and actions are checked afresh. Database work is linear in population and includes existing per-profile reads; access is controlled by promo redemption and provider work is bounded to one shortlist per refresh. Load measurement, query batching and caching remain scaling follow-ups. No global optimality claim is made for the heuristic shortlist.
 
@@ -177,15 +176,15 @@ Mobile follow-up: profile promo redemption and opt-in, conditional «Для те
 
 ## SendPulse
 
-`sendpulse_sync.py` владеет чтением двух настроек (`SENDPULSE_API_KEY`, `SENDPULSE_ADDRESSBOOK_ID`), клиентом HTTPS с Bearer-ключом и таймаутом, отбором подтверждённых адресов с маркетинговым согласием и журналом импорта `sendpulse_contacts` в PostgreSQL. `init_db()` создаёт таблицу, `purge_user_aux_data()` удаляет записи после срока восстановления. Журнал хранит SHA-256 нормализованного email, ID пользователя/книги, время успеха и состояние повторных попыток; адреса и ключи в нём не дублируются.
+`sendpulse_worker.rs` владеет чтением двух настроек (`SENDPULSE_API_KEY`, `SENDPULSE_ADDRESSBOOK_ID`), клиентом HTTPS с Bearer-ключом и таймаутом, отбором подтверждённых адресов с маркетинговым согласием и журналом импорта `sendpulse_contacts` в PostgreSQL. `init_db()` создаёт таблицу, `purge_user_aux_data()` удаляет записи после срока восстановления. Журнал хранит SHA-256 нормализованного email, ID пользователя/книги, время успеха и состояние повторных попыток; адреса и ключи в нём не дублируются.
 
-Команда `wiring-beta-places sync-sendpulse` синхронизирует до 25 аккаунтов; блокировка PostgreSQL не допускает параллельной обработки одной книги. Локальный Python-скрипт `scripts/sync_sendpulse.py --validate` проверяет метаданные книги без Flask и БД. Перед импортом повторно проверяются согласие, почта и удаление аккаунта. Контакты, уже находящиеся в книге с любым статусом, не изменяются; завершённые импорты не повторяются. Ошибки сохраняют задержку повторной попытки; ошибочный адрес не блокирует остальные. Сбой авторизации прекращает запуск. Секреты и ответы провайдера не журналируются, HTTP-редиректы запрещены.
+Команда `wiring-beta-places sync-sendpulse` синхронизирует до 25 аккаунтов; блокировка PostgreSQL не допускает параллельной обработки одной книги. Перед импортом повторно проверяются согласие, почта и удаление аккаунта. Контакты, уже находящиеся в книге с любым статусом, не изменяются; завершённые импорты не повторяются. Ошибки сохраняют задержку повторной попытки; ошибочный адрес не блокирует остальные. Сбой авторизации прекращает запуск. Секреты и ответы провайдера не журналируются, HTTP-редиректы запрещены.
 
 `deploy/wiring-sendpulse.service` и `.timer` выполняют задачу раз в пять минут после завершения предыдущей. Регистрация и подтверждение почты не зависят от доступности SendPulse. Общая БД покрывает сайт и приложения; новый API или экран не требуется. Автоматическое удаление контактов из внешней книги и отправка кампаний в эту интеграцию не входят.
 
 ## OAuth-вход
 
-`social_auth.py` владеет серверным Google/Яндекс Authorization Code flow с PKCE и Apple code flow с проверкой подписи JWT и nonce и одноразовыми browser-bound state в PostgreSQL (`oauth_flows`), привязками по provider subject (`oauth_identities`) и маршрутом callback. `app.py` предоставляет общий helper создания аккаунта с бонусами/приглашениями, cookie-сессию и удаляет OAuth-привязки при окончательной очистке. `src/features/auth/` получает доступных провайдеров через shared API/host bridge и показывает кнопки. Новые SPA-пути не вводятся. Настройка и мобильный follow-up описаны в `docs/social-login.md` и `docs/mobile-api.md`.
+Модули `oauth_start.rs` и `oauth_callback.rs` владеет серверным Google/Яндекс Authorization Code flow с PKCE и Apple code flow с проверкой подписи JWT и nonce и одноразовыми browser-bound state в PostgreSQL (`oauth_flows`), привязками по provider subject (`oauth_identities`) и маршрутом callback. Регистрация с бонусами и приглашениями общая для всех клиентов; очистка удаляет OAuth-привязки после срока восстановления. `src/features/auth/` получает доступных провайдеров через shared API/host bridge и показывает кнопки. Новые SPA-пути не вводятся. Настройка и мобильный follow-up описаны в `docs/social-login.md` и `docs/mobile-api.md`.
 
 ### Inbox badges and incoming like actions
 
@@ -193,11 +192,11 @@ Mobile follow-up: profile promo redemption and opt-in, conditional «Для те
 
 ### Moderation replies and name cooldown
 
-`support_replies.py` owns reply persistence, server-resolved recipients, source row locking, request idempotency, mail attempts and account history. Additive `support_replies` rows reference the original report/ticket and recipient account; cleanup follows the existing account lifecycle. Reports still soft-delete chat messages through existing unmatch logic. A reply does not close or resolve a moderation case. Failed mail keeps the response and one support notice; retry uses the original request id, while successful replays send nothing. Transport acceptance is not proof of receipt; crashes or ambiguous SMTP failures cannot guarantee exactly-once external delivery.
+`admin_reply.rs` owns reply persistence, server-resolved recipients, source row locking, request idempotency, mail attempts and account history. Additive `support_replies` rows reference the original report/ticket and recipient account; cleanup follows the existing account lifecycle. Reports still soft-delete chat messages through existing unmatch logic. A reply does not close or resolve a moderation case. Failed mail keeps the response and one support notice; retry uses the original request id, while successful replays send nothing. Transport acceptance is not proof of receipt; crashes or ambiguous SMTP failures cannot guarantee exactly-once external delivery.
 
 `/admin/replies/<kind>/<id>` requires the admin session, reply-specific session CSRF token, bounded body, idempotency token and per-session rate limit. Recipients cannot be supplied by the browser. Existing `/admin` serves both queues on all configured domains. `src/entries/server-header.tsx` mounts small Preact reply composers into server-template hosts without a new SPA path. `GET /api/support/replies` returns only the current account's responses and supports existing mobile authorization, including report-banned accounts. `ReplyHistory.tsx` owns guarded polling and cancellation; inbox support notices open that screen.
 
-`profile_policy.py` defines the 14-day interval. Nullable `users.name_changed_at` preserves the first change for old accounts. `/api/me` updates lock the user row before reading the cooldown and atomically store the name/timestamp; unchanged parsed names do not extend it. Private user payloads expose the next available time. `NameEditor.tsx` isolates confirmed name changes from autosave, using the existing serialized profile queue so delayed responses cannot restore an old name. The server enforces the same rule for web, drafts and mobile. See `mobile-api.md` for screen/copy parity.
+`profile_edit.rs` defines the 14-day interval. Nullable `users.name_changed_at` preserves the first change for old accounts. `/api/me` updates lock the user row before reading the cooldown and atomically store the name/timestamp; unchanged parsed names do not extend it. Private user payloads expose the next available time. `NameEditor.tsx` isolates confirmed name changes from autosave, using the existing serialized profile queue so delayed responses cannot restore an old name. The server enforces the same rule for web, drafts and mobile. See `mobile-api.md` for screen/copy parity.
 
 Ordinary draft and publish requests omit `name`; the profile handler defaults an omitted name to the current locked row. Thus a stale draft or a second device editing another field cannot inadvertently rename the account or trigger the cooldown. Restored browser drafts take their name from the server. Only the separate confirmed operation supplies a new name.
 
@@ -205,7 +204,7 @@ Ordinary draft and publish requests omit `name`; the profile handler defaults an
 
 `wiring-mobile` реализует React Native страницы сайта и те же пять CSS-палитр. Конкретная матрица и неподтверждённая device/visual проверка описаны в его `docs/web-parity.md`. Прежние мобильные follow-up в разделах выше теперь сопоставляются с этой матрицей.
 
-`social_auth.py` расширяет общий OAuth flow полями native challenge/state в `oauth_flows` и таблицей одноразовых хешированных результатов `oauth_native_codes` (TTL 60 с). `mobile_api.py` экспортирует issuer native-сессии через `app.extensions`, поэтому OAuth и email verify используют тот же refresh family/password fingerprint. Все данные остаются в существующей PostgreSQL; cookie-вход сайта сохраняется. Bearer также разрешён на общей форме `/support`. Ассоциации HTTP-ссылок обслуживают два публичных JSON-маршрута Rust в `/.well-known/`.
+Модули `oauth_start.rs` и `oauth_callback.rs` расширяет общий OAuth flow полями native challenge/state в `oauth_flows` и таблицей одноразовых хешированных результатов `oauth_native_codes` (TTL 60 с). OAuth и подтверждение почты используют тот же формат семейства refresh-токенов и отпечатка пароля. Все данные остаются в существующей PostgreSQL; cookie-вход сайта сохраняется. Bearer также разрешён на общей форме `/support`. Ассоциации HTTP-ссылок обслуживают два публичных JSON-маршрута Rust в `/.well-known/`.
 
 ## Общие настройки и фото чата
 
@@ -241,7 +240,7 @@ Ordinary draft and publish requests omit `name`; the profile handler defaults an
 
 ## Реакции чата
 
-`message_reactions.py` группирует реакции и сохраняет одну emoji на `(message_id,user_id)` в PostgreSQL. `init_db` создаёт `message_reactions` с каскадной очисткой при окончательном удалении сообщения; unmatch/block/report сохраняют сообщения и реакции скрытыми. Тонкий PUT handler использует текущую авторизацию и `_thread_message`; GET добавляет реакции одним пакетным запросом для возвращаемых сообщений. `Reactions.tsx` владеет выбором, защитой повторного запроса и ошибкой через toast; экран использует прежний guarded polling. Нативный чат использует общий контракт, описанный в `mobile-api.md`.
+`message_edits.rs` группирует реакции и сохраняет одну emoji на `(message_id,user_id)` в PostgreSQL. `init-schema` создаёт `message_reactions` с каскадной очисткой при окончательном удалении сообщения; unmatch/block/report сохраняют сообщения и реакции скрытыми. Тонкий PUT handler использует текущую авторизацию и `_thread_message`; GET добавляет реакции одним пакетным запросом для возвращаемых сообщений. `Reactions.tsx` владеет выбором, защитой повторного запроса и ошибкой через toast; экран использует прежний guarded polling. Нативный чат использует общий контракт, описанный в `mobile-api.md`.
 
 ## Доставка push после закрытия
 
@@ -261,11 +260,11 @@ Native отправка использует high priority и TTL 12 часов.
 
 On both production domains, Rust handles authorization, rate limits, normalization and results for `GET /api/places`. It builds the catalog from the same source data and preserves ordering, translations and deduplication. See [rust-migration.md](rust-migration.md) for route ownership and rollback.
 
-All production application routes and workers now use Rust, including auth, OAuth, chat, moderation, transcription, the admin panel and SendPulse. Flask remains a local reference for compatibility checks on disposable PostgreSQL. The Rust command `init-schema` initializes a fresh PostgreSQL schema.
+All production application routes and workers now use Rust, including auth, OAuth, chat, moderation, transcription, the admin panel and SendPulse. Local development runs the same Rust backend; HTTP tests start a separate PostgreSQL instance. The Rust command `init-schema` initializes a fresh PostgreSQL schema.
 
 `cities.py` preserves existing city strings. `world_places.py` adds 230,662 GeoNames cities500 suggestions with multilingual aliases. Country names come from Unicode CLDR, preserving existing identifiers. Data ships with the server; search needs no external geocoder. New values use `São Paulo · Бразилия`, adding a region for homonyms when available. Same-name settlements within one region can still merge under the existing string contract. Country is the final segment. `/api/catalog` stays small; authenticated `/api/places` returns bounded suggestions. Sources, licenses and rebuild instructions: `resources/places/README.md`.
 
-Rust validates cities on `/api/places/resolve` and `/api/me/city`; profile PATCH still uses `place_validation.py`. Known cities resolve locally. OpenAI checks unknown settlements and spelling using strict JSON output and the selected country. Only city and country are sent; the key stays server-side. Model selection: `OPENAI_CITY_MODEL`, then `OPENAI_MODEL`, default `gpt-4o-mini`. Ambiguous/invalid input is rejected; provider failures return 503 without saving unchecked input. Clients request correction after an explicit selection, never on every keystroke. Approved corrections are shared across workers in PostgreSQL `place_resolutions`. Each backend limits new AI checks to 12/min/user. cities500 does not contain every settlement; AI validation covers names outside that dataset.
+Rust validates cities on `/api/places/resolve` and `/api/me/city`; profile PATCH uses `profile_edit.rs`. Known cities resolve locally. OpenAI checks unknown settlements and spelling using strict JSON output and the selected country. Only city and country are sent; the key stays server-side. Model selection: `OPENAI_CITY_MODEL`, then `OPENAI_MODEL`, default `gpt-4o-mini`. Ambiguous/invalid input is rejected; provider failures return 503 without saving unchecked input. Clients request correction after an explicit selection, never on every keystroke. Approved corrections are shared across workers in PostgreSQL `place_resolutions`. Each backend limits new AI checks to 12/min/user. cities500 does not contain every settlement; AI validation covers names outside that dataset.
 
 Web `CitySelect` and native `CityPicker` share these APIs in onboarding, profiles, feed/likes filters and visibility settings. Search is debounced and cancelled on query/country changes and unmount. Installed native apps need an updated build.
 
@@ -277,4 +276,4 @@ Web `CitySelect` and native `CityPicker` share these APIs in onboarding, profile
 
 ## Серверный учёт регистраций
 
-`registration_events.py` — транзакционный журнал фактов создания и очередь Measurement Protocol в существующей PostgreSQL. `_create_registered_user` — единая точка web/native/email/OAuth; один `user_id` — один факт. OAuth flow хранит только согласие и ClientID для web, native не заимствует consent браузера. Shared API маркирует server-v1; signed HttpOnly cookie переносит только атрибуцию уже созданного аккаунта. Серверная и браузерная отправки одной регистрации взаимно исключены, старые клиенты и исторические события не догружаются. `scripts/sync_registrations.py`/systemd timer используют bounded batch, advisory lock и durable claim. Неоднозначный ответ не повторяется автоматически, поскольку MP не документирует event-id дедупликацию. Тайм-аут 12 часов сохраняет реальное время события. В админке факт, согласие/атрибуция и состояние доставки разделены. Токен остаётся в `/etc/wiring.env`, не в клиентских bundles. Детали и сверка: README.
+`registration.rs` — транзакционный журнал фактов создания и очередь Measurement Protocol в существующей PostgreSQL. `Registration::create` — единая точка web/native/email/OAuth; один `user_id` — один факт. OAuth flow хранит только согласие и ClientID для web, native не заимствует consent браузера. Shared API маркирует server-v1; signed HttpOnly cookie переносит только атрибуцию уже созданного аккаунта. Серверная и браузерная отправки одной регистрации взаимно исключены, старые клиенты и исторические события не догружаются. `registration_worker.rs` и systemd timer используют bounded batch, advisory lock и durable claim. Неоднозначный ответ не повторяется автоматически, поскольку MP не документирует event-id дедупликацию. Тайм-аут 12 часов сохраняет реальное время события. В админке факт, согласие/атрибуция и состояние доставки разделены. Токен остаётся в `/etc/wiring-registration-worker.env`, не в клиентских bundles. Детали и сверка: README.

@@ -1,8 +1,0 @@
-services:
-  edge:
-    volumes:
-      - ./Caddyfile.web-logout:/etc/caddy/Caddyfile:ro
-  places:
-    image: wiring-beta-places:public-web-logout
-    environment:
-      WIRING_PUBLIC_WEB_LOGOUT: "1"

@@ -11,7 +11,7 @@ use crate::{admin_stats,chat_write::Writer,login::LoginLimit,public_http::{heade
     signed_session::SessionKeys,spa_http::web_cookie};
 
 struct Panel {
-    db:Arc<Writer>, keys:SessionKeys, tokens:Vec<String>, origin:String, limit:LoginLimit,
+    db:Arc<Writer>, keys:SessionKeys, tokens:Vec<String>, origin:String, secure:bool, limit:LoginLimit,
     templates:[Environment<'static>;2], messages:Arc<HashMap<String,String>>, catalogs:[Value;2], threshold:f32,
 }
 
@@ -19,9 +19,7 @@ pub(crate) fn routes(writer:Option<Arc<Writer>>,directory:&Path)->Result<Router,
     if env::var("WIRING_PUBLIC_ADMIN_PAGE").as_deref()!=Ok("1") {return Ok(Router::new());}
     let key=env::var("APP_SECRET_KEY")?;
     if key.trim().is_empty(){return Err("Admin page requires signed sessions".into());}
-    let origin=env::var("SITE_URL").unwrap_or_else(|_|"https://wiring.club".into()).trim_end_matches('/').to_owned();
-    let parsed=reqwest::Url::parse(&origin)?;
-    if parsed.origin().ascii_serialization()!=origin || parsed.scheme()!="https" {return Err("Admin page requires an HTTPS site origin".into());}
+    let (origin,secure)=crate::public_http::admin_origin()?;
     let tokens=env::var("ADMIN_TOKEN").unwrap_or_default().split(',').map(str::trim).filter(|token|!token.is_empty()).map(str::to_owned).collect();
     let messages:Arc<HashMap<String,String>>=Arc::new(serde_json::from_slice(&fs::read(directory.join("admin-i18n-en.json"))?)?);
     let template=fs::read_to_string(directory.join("admin.html"))?;
@@ -39,7 +37,7 @@ pub(crate) fn routes(writer:Option<Arc<Writer>>,directory:&Path)->Result<Router,
     let catalogs=[serde_json::from_slice(&fs::read(directory.join("api-catalog-ru.json"))?)?,
         serde_json::from_slice(&fs::read(directory.join("api-catalog-en.json"))?)?];
     let templates=[make(false)?,make(true)?];
-    let panel=Panel{db:writer.ok_or("Admin page requires PostgreSQL")?,keys:SessionKeys::new(key.as_bytes()),tokens,origin,
+    let panel=Panel{db:writer.ok_or("Admin page requires PostgreSQL")?,keys:SessionKeys::new(key.as_bytes()),tokens,origin,secure,
         limit:LoginLimit::configured(Duration::from_secs(3600),12),templates,messages,catalogs,
         threshold:env::var("SUPPORT_TASK_THRESHOLD").ok().and_then(|raw|raw.parse::<f32>().ok()).filter(|n|n.is_finite()).unwrap_or(6.0).clamp(0.0,10.0)};
     Ok(Router::new().route("/admin",any(page)).route("/admin/export/marketing-audience",any(export)).with_state(Arc::new(panel)))
@@ -68,7 +66,8 @@ fn set_cookie(panel:&Panel,response:&mut Response,claims:&serde_json::Map<String
     let expires=if claims.get("_permanent")==Some(&Value::Bool(true)) {
         format!("; Expires={}",httpdate::fmt_http_date(UNIX_EPOCH+Duration::from_secs(now+crate::signed_session::WEB_TTL)))
     }else{String::new()};
-    if let Ok(value)=HeaderValue::from_str(&format!("wiring_session={token}{expires}; Secure; HttpOnly; Path=/; SameSite=Lax")) {
+    let secure=if panel.secure {"; Secure"} else {""};
+    if let Ok(value)=HeaderValue::from_str(&format!("wiring_session={token}{expires}{secure}; HttpOnly; Path=/; SameSite=Lax")) {
         response.headers_mut().append(header::SET_COOKIE,value);
     }
 }

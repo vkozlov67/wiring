@@ -1,8 +1,0 @@
-services:
-  edge:
-    volumes:
-      - ./Caddyfile.profile-read:/etc/caddy/Caddyfile:ro
-  places:
-    image: wiring-beta-places:public-profile-read
-    environment:
-      WIRING_PUBLIC_PROFILE_READ: "1"

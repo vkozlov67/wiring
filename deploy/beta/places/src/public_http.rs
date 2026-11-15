@@ -166,3 +166,15 @@ async fn serve(
     localize(&mut response, &headers, locale, persist, localized);
     response
 }
+/// Administrative forms require HTTPS except in the explicitly enabled loopback stack.
+pub(crate) fn admin_origin() -> Result<(String, bool), Box<dyn std::error::Error>> {
+    let origin = get_setting("SITE_URL", "https://wiring.club").trim_end_matches('/').to_owned();
+    let parsed = reqwest::Url::parse(&origin)?;
+    let https = parsed.scheme() == "https";
+    let local = std::env::var("WIRING_LOCAL_HTTP").as_deref() == Ok("1")
+        && parsed.scheme() == "http" && parsed.host_str() == Some("127.0.0.1");
+    if parsed.origin().ascii_serialization() != origin || !(https || local) {
+        return Err("Admin requests require an HTTPS site origin".into());
+    }
+    Ok((origin, https))
+}

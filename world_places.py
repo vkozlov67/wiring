@@ -20,7 +20,7 @@ def countries() -> dict:
 def rows() -> list:
     global _ROWS
     if _ROWS is None:
-        # Load once even with concurrent Gunicorn threads; avoid a giant JSON text
+        # Load once even with concurrent readers; avoid a giant JSON text
         # allocation and Python's wide Unicode storage for multilingual aliases.
         with _ROWS_LOCK:
             if _ROWS is None:

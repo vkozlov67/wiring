@@ -15,9 +15,7 @@ pub(crate) fn routes(writer:Option<Arc<Writer>>)->Result<Router,Box<dyn Error>> 
     if env::var("WIRING_PUBLIC_ADMIN_ACTIONS").as_deref()!=Ok("1") {return Ok(Router::new());}
     let key=env::var("APP_SECRET_KEY")?;
     if key.trim().is_empty(){return Err("Admin actions require signed sessions".into());}
-    let origin=env::var("SITE_URL").unwrap_or_else(|_|"https://wiring.club".into()).trim_end_matches('/').to_owned();
-    let parsed=reqwest::Url::parse(&origin)?;
-    if parsed.origin().ascii_serialization()!=origin || parsed.scheme()!="https" {return Err("Admin actions require an HTTPS site origin".into());}
+    let (origin,_)=crate::public_http::admin_origin()?;
     let enabled=env::var("ADMIN_TOKEN").is_ok_and(|value|value.split(',').any(|token|!token.trim().is_empty()));
     let db=writer.ok_or("Admin actions require PostgreSQL")?;
     let threshold=env::var("SUPPORT_TASK_THRESHOLD").ok().and_then(|value|value.parse::<f32>().ok()).filter(|value|value.is_finite()).unwrap_or(6.0).clamp(0.0,10.0);
@@ -39,7 +37,6 @@ async fn serve(State(state):State<Arc<Admin>>,request:Request<Body>)->Response {
         return forbidden();
     }
     // The old admin form has no general CSRF field. Current browsers send an Origin on form POST.
-    // Prefer an explicit CSRF token once all admin forms have moved off the Flask template.
     if !header_text(&parts.headers,"origin").is_some_and(|origin|bool::from(origin.as_bytes().ct_eq(state.origin.as_bytes()))) {
         return forbidden();
     }

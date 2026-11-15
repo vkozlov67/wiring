@@ -14,15 +14,7 @@ _override = ContextVar('wiring_language', default=None)
 LANGUAGES = ('ru', 'en')
 
 def get_language():
-    override = _override.get()
-    if override in LANGUAGES:
-        return override
-    from flask import has_request_context, request
-    if has_request_context():
-        for value in (request.headers.get('X-Wiring-Language'), request.args.get('lang'), request.cookies.get('wiring-language')):
-            if value in LANGUAGES:
-                return value
-    return 'ru'
+    return _override.get() or 'ru'
 
 @contextmanager
 def use_language(language):
@@ -64,28 +56,3 @@ def catalog_copy(value):
     if isinstance(value, dict):
         return {key: tr(item) if key in ('label', 'name', 'hint', 'expand', 'blurb', 'tip') and isinstance(item, str) else catalog_copy(item) for key, item in value.items()}
     return value
-
-def install(app):
-    from flask import request
-    app.jinja_env.filters['localized_html'] = editorial_html
-    @app.context_processor
-    def language_context():
-        return {'_': tr, 'language': get_language()}
-    @app.after_request
-    def language_response(response):
-        language = get_language()
-        if request.args.get('lang') in LANGUAGES:
-            response.set_cookie('wiring-language', language, max_age=31536000, samesite='Lax', secure=request.is_secure)
-        if response.mimetype in ('text/html', 'application/json'):
-            response.headers['Content-Language'] = language
-            response.vary.add('Cookie'); response.vary.add('X-Wiring-Language')
-        if response.is_json and language == 'en':
-            data = response.get_json()
-            if isinstance(data, dict):
-                if isinstance(data.get('error'), str): data['error'] = tr(data['error'])
-                if request.path.endswith('/api/catalog'): data = catalog_copy(data)
-                for field in ('user', 'peer'):
-                    if isinstance(data.get(field), dict) and data[field].get('report_ban_message'):
-                        data[field]['report_ban_message'] = tr(data[field]['report_ban_message'])
-                response.set_data(json.dumps(data, ensure_ascii=False))
-        return response

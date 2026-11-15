@@ -11,41 +11,24 @@
 | **UI bug regressions (optional)** | `npm run test:ui:browser` (after build, same Playwright overrides) | Incoming like actions, confirmation/cancel/error, duplicate and navigation guards, bottom profile back, country search and unread badge alignment |
 | **Trello regressions 31 October (optional)** | `npm run test:trello:browser` (after build, same Playwright overrides) | Full shell: saved diagnosis edits → fresh recommendations; crop cancel/done hit tests at mobile/landscape sizes; late chat images after 2.5s and keyboard resize while following latest or reading history |
 | **Admin tabs (optional)** | `npm run test:admin:browser` (after build, same Playwright overrides; local `.venv` required) | Real Jinja template with synthetic data, tab history/deep links, keyboard, retained reply drafts, mobile overflow, no-JS fallback; no database or production account |
-| **API / app** | `python3 -m unittest discover -s tests -q` | Flask routes, auth, swipes, media — `test_app.py` |
-| **Logic** | same unittest run | Catalog, icebreakers helpers — `test_logic.py` |
-| **Support triage** | same | Task scoring — `test_support_triage.py` |
-| **All** | `./scripts/test.sh` | Typecheck + build client + router tests + unittest |
+| **Rust HTTP API** | `./scripts/test-api.sh` | Routes, sessions, registration, consent, city catalog, chat, media, support and admin via nginx and PostgreSQL |
+| **All** | `./scripts/test.sh` | Frontend checks, editorial data checks and the Rust HTTP suite |
 
-## Layout
+The Rust suite lives in `deploy/beta/places/tests/http_api.rs`. It runs in a disposable Compose project with synthetic data, local secrets and no access to external providers. It makes no changes in an existing development or production database.
 
-```
-tests/
-  __init__.py
-  spa_paths.py          # SPA shell GET paths (sync with src/router/routes.ts)
-  router.test.mjs       # Built router bundle (public/dist/router.js)
-  test_app.py           # Integration tests against Flask test client
-  test_logic.py         # Unit tests for pure Python modules
-  test_support_triage.py
-```
-
-Router source: `src/router/` → `public/dist/router.js` (loaded by `src/app/bootstrap.js`).
-
-When adding a new SPA URL, update `app.py` routes, `src/router/routes.ts`, and `tests/spa_paths.py`, then extend `router.test.mjs` if matching/guards change.
+When adding a SPA URL, update `spa_http.rs`, `src/router/routes.ts`, the route contract in `http_api.rs` and the router test if matching changes.
 
 The browser suite serves only local built assets and synthetic profiles, mocks API responses, and blocks external network requests. It does not use PostgreSQL or a production login. It requires an existing Playwright installation and Chromium browser; they are not runtime dependencies of WIRING and are not required by the default CI suite. `PLAYWRIGHT_MODULE_PATH` may point to an external Playwright `index.mjs`, and `PLAYWRIGHT_CHROMIUM_EXECUTABLE` may select an installed Chrome executable. Without overrides it uses `import("playwright")` and Playwright's default Chromium. This is mobile emulation, not a Safari or physical-device certification.
 
-Moderation/name regressions in `test_app.py`, `test_mobile_api.py` and `test_notify.py` cover each-report/ban mail routing, transport failure, admin session/CSRF permissions, replay and mail retry, account-only history, banned/mobile access, no-contact handling, rate limits, account-purge retention, 14-day boundaries and concurrent name updates. The optional UI browser suite additionally verifies name confirmation/locking, support history and actual admin form payloads; its form submission is intercepted locally. The profile autosave suite verifies the shared queue with a concurrent confirmed name change. Test setup clears inherited mail/Telegram transports; transport checks use mocks.
 
 Own-profile browser regression: `npm run test:profile:browser` after build, with the same Playwright overrides. It uses the full shell, mocked local APIs, and verifies `/me` preview → explicit `/me/edit` → reload → profile-tab preview, without an implicit profile save. Optional `PUBLISHED_ASSETS=1` runs the same assertions on public assets after release. `PUBLISHED_BASELINE=1` reproduces the pre-fix editor entry using public assets only; it never reads a production account or sends a production API mutation.
 
-Реакции: `node tests/chat-reactions-browser.test.mjs` после сборки (те же Playwright overrides) проверяет текст/фото/голосовые, замену/снятие, перезагрузку, ошибку сохранения, двойное нажатие и ширину 320/390/1024. API-тесты в `test_app.py` проверяют идемпотентность, два участника, чужой доступ, блокировку, soft-delete и окончательную очистку.
+Реакции: `node tests/chat-reactions-browser.test.mjs` после сборки (те же Playwright overrides) проверяет текст/фото/голосовые, замену/снятие, перезагрузку, ошибку сохранения, двойное нажатие и ширину 320/390/1024. Rust проверяет идемпотентность, чужой доступ и сохранение скрытых сообщений в PostgreSQL после unmatch, block и report.
 
-Push: `node --test tests/web-push.test.mjs` проверяет первую установку service worker, смену VAPID key, отсутствие дублирования polling и обработку push без открытого окна. API-тесты проверяют отправку сразу после закрытия (last_seen 0–119 секунд назад), opt-out и безопасное логирование отказа провайдера. Тесты не отправляют push реальным участникам. `wiring-mobile/tests/pushRegistration.test.mjs` проверяет регистрацию при старте/foreground/ротации токена, повтор после ошибки и отмену при logout.
+Push: `node --test tests/web-push.test.mjs` проверяет первую установку service worker, смену VAPID key, отсутствие дублирования polling и обработку push без открытого окна. `wiring-mobile/tests/pushRegistration.test.mjs` проверяет регистрацию при старте/foreground/ротации токена, повтор после ошибки и отмену при logout.
 
 `npm run test:push` включён в `scripts/test.sh`. Дополнительно `npm run test:push:browser` (Playwright overrides как выше) закрывает все страницы локального сайта, доставляет синтетическое событие через Chromium CDP в настоящий service worker и проверяет созданное системное уведомление. Этот тест не проверяет внешний Web Push transport, APNs, FCM или физическое устройство.
 
-Country filter: `node tests/country-filter-browser.test.mjs` после сборки, с теми же Playwright overrides. Полный shell проверяет country/city в запросах ленты и лайков, сужение городов, сохранение/сброс и размеры 320/390/1024. API-тест проверяет несколько городов страны, несовместимые/неизвестные значения, отсутствие дублей, сохранение исключений и истории неподходящих кандидатов. Native unit-тесты покрывают миграцию сохранённых фильтров, query и смену страны.
 
-Visibility exclusions: API regressions verify that diagnosis IDs are ignored, active vibes restrict visibility, and PATCH without hide_tags retains the choice. Country-filter browser tests retain vibe controls and payload while removing the diagnosis block. They also check global city search, explicit AI correction, invalid input without overwriting the city, and reset on reopening. City API tests cover Cyrillic/Latin/accent aliases, cached corrections, smaller settlements, malformed/refused AI output, country mismatch and provider failure; test_place_validation.py checks the strict OpenAI transport schema without real credentials.
 
 `node tests/archive-browser.test.mjs` проверяет четыре вкладки архива в собранном shell на 320/390/1280 px: раздельные списки и счётчики, переключение клавиатурой, путь «Скрыть → Исключить → Дизлайки», отмена подтверждения, ошибка и повтор, возврат анкеты. API синтетический, нужны Playwright и Chromium (можно задать `PLAYWRIGHT_MODULE_PATH` и `PLAYWRIGHT_CHROMIUM_EXECUTABLE`).

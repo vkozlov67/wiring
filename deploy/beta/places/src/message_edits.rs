@@ -72,7 +72,7 @@ pub(crate) async fn mutate(db: &Writer, uid: i64, id: Option<i64>, reaction: boo
         return Ok(if reaction { error(StatusCode::BAD_REQUEST, "Invalid reaction", "Недопустимая реакция") }
             else { error(StatusCode::BAD_REQUEST, "Message must contain between 1 and 1000 characters", "сообщение: 1–1000 символов") });
     };
-    // Commit last_seen before taking the pair lock, as Flask does. Reports lock the pair first.
+    // Commit last_seen before taking the pair lock. Reports lock the pair first.
     let mutation = if let Some(message_id) = id {
         db.transaction(move |tx| Box::pin(async move {
             mutate_message(tx, &MutateMessage { uid, message_id, changed_at: now, action }).await

@@ -1,12 +1,12 @@
 # SPA routing
 
-The browser shell (`src/app/bootstrap.js`, built as `public/dist/app.js`) shares its URL scheme with the production Rust server and the local Flask reference. Route logic is implemented in **`src/router/`** and shipped as **`public/dist/router.js`**.
+The browser shell (`src/app/bootstrap.js`, built as `public/dist/app.js`) shares its URL scheme with the Rust server in development and production. Route logic is implemented in **`src/router/`** and shipped as **`public/dist/router.js`**.
 
 ## Source layout
 
 ```
 src/router/
-  routes.ts    # SPA_PATHS — keep in sync with app.py @app.get routes
+  routes.ts    # SPA_PATHS — keep in sync with spa_http.rs
   match.ts     # pathname → view (+ id for chat/person)
   paths.ts     # hrefFor, normalizePath
   guards.ts    # planRoute — guest vs authed (hydrateFromUrl)
@@ -46,7 +46,7 @@ Admin tabs use document fragments: `/admin#overview`, `#people`, `#analytics`, `
 3. Navigation: `goToView()` + `syncUrl()` at end of `render()`.
 4. Auth screens call `syncUrl()` after Preact mount.
 
-When adding a route: update **`routes.ts`**, **`spa_http.rs`**, applicable proxy routes, the development **`app.py`** SPA GET, and **`router.test.mjs`**.
+When adding a route: update **`routes.ts`**, **`spa_http.rs`**, applicable proxy routes, and **`router.test.mjs`**.
 
 Server legal/admin templates load `public/dist/server-header.js` to mount the shared `AppHeader`; document bodies remain server-rendered and URLs are unchanged. Auth headers mount with the Preact auth feature.
 
