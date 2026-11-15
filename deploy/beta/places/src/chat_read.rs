@@ -89,7 +89,7 @@ pub(crate) async fn fetch_history(tx: &Transaction<'_>, input: HistoryRequest) -
     mark_read(tx, &pair).await?;
     tx.execute(
         "UPDATE notifications SET \"read\" = 1 WHERE user_id = $1::bigint AND from_id = $2::bigint
-            AND kind = 'message' AND \"read\" = 0",
+            AND kind IN ('message', 'match') AND \"read\" = 0",
         &pair,
     ).await?;
     let messages = render_thread(ThreadRequest {

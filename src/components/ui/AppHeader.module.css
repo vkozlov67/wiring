@@ -198,6 +198,7 @@
 }
 
 .brandSection {
+  min-width: 0;
   font-family: var(--serif, Fraunces, Georgia, serif);
   font-size: 20px;
   font-weight: 600;
@@ -456,6 +457,6 @@
   .inner { gap: 6px; }
   .headerEnd { gap: 5px; }
   .brandName { font-size: 23px; }
-  .brandSection { max-width: 74px; overflow: hidden; text-overflow: ellipsis; }
+  .brandSection { max-width: 74px; }
   .language { width: 44px; }
 }

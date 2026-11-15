@@ -53,6 +53,8 @@
   scroll-margin-bottom: calc(var(--tabbar-clearance, 88px) + env(safe-area-inset-bottom));
 }
 .error, .serverError { margin: 0; color: var(--coral); font-size: 12.5px; line-height: 1.4; }
+.recommendationsActivation { display: grid; gap: 10px; }
+.recommendationsActivation > button { justify-self: start; }
 .recommendationsHint { margin: 0; color: var(--muted); font-size: 12.5px; line-height: 1.45; }
 .serverError { padding: 12px 14px; border: 1px solid var(--glow-2); border-radius: 13px; background: var(--glow-2); }
 .photosBlock { display: grid; gap: 12px; }

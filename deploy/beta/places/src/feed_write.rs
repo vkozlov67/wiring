@@ -143,6 +143,8 @@ pub(crate) struct FeedClaim {
     pub(crate) now: i64,
     pub(crate) limit: i64,
     pub(crate) include_delivered: bool,
+    #[serde(default)]
+    pub(crate) recover_unviewed: bool,
     pub(crate) candidates: Vec<i64>,
 }
 
@@ -179,7 +181,7 @@ pub(crate) async fn claim_delivery(tx: &Transaction<'_>, input: FeedClaim) -> Tr
          WHERE u.id = ANY($2::bigint[]) AND u.id != $1 AND COALESCE(u.deleted_at, 0) = 0
            AND COALESCE(u.paused, 0) = 0 AND COALESCE(u.report_banned_at, 0) = 0
            AND COALESCE(u.is_seed, 0) = 0 AND h.excluded_at IS NULL
-           AND ($3 OR h.other_id IS NULL)
+           AND ($3 OR h.other_id IS NULL OR ($6 AND h.viewed_at IS NULL))
            AND NOT EXISTS (SELECT 1 FROM swipes s WHERE s.from_id = $1 AND s.to_id = u.id)
            AND NOT EXISTS (SELECT 1 FROM blocks b WHERE (b.from_id = $1 AND b.to_id = u.id)
                 OR (b.from_id = u.id AND b.to_id = $1))
@@ -187,8 +189,8 @@ pub(crate) async fn claim_delivery(tx: &Transaction<'_>, input: FeedClaim) -> Tr
                 WHERE s.from_id = u.id AND s.to_id = $1 AND s.direction = 'like'))
            AND (NOT $4 OR NOT EXISTS (SELECT 1 FROM snoozes s
                 WHERE s.user_id = $1 AND s.other_id = u.id AND s.until_at > $5::bigint))
-         ORDER BY delivered, random()",
-        &[&input.uid, &input.candidates, &input.include_delivered, &premium, &input.now],
+         ORDER BY delivered, h.viewed_at IS NOT NULL, random()",
+        &[&input.uid, &input.candidates, &input.include_delivered, &premium, &input.now, &input.recover_unviewed],
     ).await?;
     let mut ids = Vec::with_capacity(input.limit as usize);
     let mut has_more = false;

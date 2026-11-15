@@ -209,12 +209,13 @@ export function PersonScreen({ host }: { host: PersonHostBridge }) {
           {person.matched ? <Button variant="ghost" slim disabled={busy} onClick={() => setConfirm("block")}>{tr("в блок")}</Button> : null}
           <Button variant="ghost" slim disabled={busy} onClick={() => setReportOpen(true)}>{tr("пожаловаться")}</Button>
         </div> : null}
-        {error ? <p class={styles.error} role="alert">{error}</p> : null}
+        {error && !passOpen ? <p class={styles.error} role="alert">{error}</p> : null}
         <Button variant="ghost" fullWidth href={host.hrefFor(backView)} nav={backView} onClick={go(backView)}>{iconArrow}<span>{tr("назад")}</span></Button>
       </div>
     </main>
     <Modal isOpen={passOpen} onClose={() => { if (!busy) setPassOpen(false); }} title={tr("Больше не показывать?")} footer={<><Button variant="ghost" slim disabled={busy} onClick={() => setPassOpen(false)}>{tr("Отмена")}</Button><Button variant="solid" slim loading={busy} disabled={busy} onClick={() => void run(async () => { await host.swipe("pass"); setPassOpen(false); })}>{tr("Исключить")}</Button></>}>
       <p class={styles.modalHint}>{tr("Эта анкета больше не появится в ленте. Вернуть её можно в своём профиле, рядом с «Редактировать анкету». Чтобы просто закрыть анкету, нажми «назад».")}</p>
+      {error ? <p class={styles.error} role="alert">{error}</p> : null}
     </Modal>
     <Modal isOpen={confirm !== null} onClose={() => !busy && setConfirm(null)} title={confirm === "unmatch" ? tr("Убрать чат?") : tr("Скрыть человека?")} footer={<><Button variant="ghost" slim disabled={busy} onClick={() => setConfirm(null)}>{tr("отмена")}</Button><Button variant="solid" slim loading={busy} disabled={busy} onClick={confirmAction}>{confirm === "unmatch" ? tr("убрать чат") : tr("скрыть")}</Button></>}>
       <p class={styles.modalHint}>{confirm === "unmatch" ? tr("Переписка сохранится, но чат исчезнет из списка.") : tr("Человек исчезнет из ленты и чатов.")}</p>

@@ -192,6 +192,11 @@ async fn message_idempotency_reactions_and_soft_deletion() {
     let edit = || api.request(Method::PATCH,&format!("/api/messages/{id}")).json(&json!({"body":"Edited Rust message"}));
     expect(edit().header(header::COOKIE,&peer_cookie), 404).await;
     expect(edit().header(header::COOKIE,&dev), 200).await;
+    let unread = json_response(api.get("/api/inbox").header(header::COOKIE, &peer_cookie), 200).await;
+    assert!(unread["unread"].as_i64().unwrap() > 0);
+    expect(api.get(&format!("/api/messages/{dev_id}")).header(header::COOKIE, &peer_cookie), 200).await;
+    let read = json_response(api.get("/api/inbox").header(header::COOKIE, &peer_cookie), 200).await;
+    assert_eq!(read["unread"], 0);
     expect(api.request(Method::PUT,&format!("/api/messages/{id}/reaction")).header(header::COOKIE,&peer_cookie)
         .json(&json!({"emoji":"👍"})), 200).await;
 
@@ -205,6 +210,25 @@ async fn message_idempotency_reactions_and_soft_deletion() {
         let row = db.query_one("SELECT count(*), count(deleted_at) FROM messages WHERE (from_id,to_id) IN (($1::bigint,$2::bigint),($2,$1))", &[&dev_id,&other]).await.unwrap();
         assert_eq!((row.get::<_,i64>(0),row.get::<_,i64>(1)), (before,before), "{action}");
     }
+}
+
+#[tokio::test]
+async fn feed_recovers_prefetched_cards_until_viewed() {
+    let api = Api::new();
+    let cookie = api.web("ira").await;
+    let feed = |query: &str| api.get(&format!("/api/feed?hide_empty=0&{query}")).header(header::COOKIE, &cookie);
+    let initial = json_response(feed("limit=30"), 200).await;
+    let cards = initial["cards"].as_array().unwrap();
+    assert!(cards.len() >= 2);
+    let viewed = cards[0]["id"].as_i64().unwrap();
+    let prefetched = cards[1]["id"].as_i64().unwrap();
+    expect(api.post("/api/feed/view", json!({"target_id":viewed})).header(header::COOKIE, &cookie), 200).await;
+    let recovered = json_response(feed("limit=30"), 200).await;
+    let recovered = recovered["cards"].as_array().unwrap();
+    assert!(!recovered.iter().any(|card| card["id"] == viewed));
+    assert!(recovered.iter().any(|card| card["id"] == prefetched));
+    let skipped = json_response(feed(&format!("limit=30&skip={prefetched}")), 200).await;
+    assert!(!skipped["cards"].as_array().unwrap().iter().any(|card| card["id"] == prefetched));
 }
 
 #[tokio::test]

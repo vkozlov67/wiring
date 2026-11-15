@@ -51,6 +51,16 @@ export function createInboxController({
   let markingRead = false;
   let timer = 0;
 
+  const noticeStorageKey = () => `wiring.seen-notices.${state.user?.id}`;
+  const shownInSession = (): string[] => {
+    try {
+      const saved: unknown = JSON.parse(sessionStorage.getItem(noticeStorageKey()) || "[]");
+      return Array.isArray(saved) ? saved.filter((id) => typeof id === "string") : [];
+    } catch {
+      return [];
+    }
+  };
+
   const noticeAction = (note: Notice) => async () => {
     if (!note) return;
     if (note.kind === "like") {
@@ -116,12 +126,21 @@ export function createInboxController({
     }
     syncChrome();
     const fresh = (data.notices || []).filter((note: Notice) => !seenNotices.has(note.id));
+    const shown = new Set(shownInSession());
+    const matchPeers = new Set((data.notices || []).filter((note: Notice) => note.kind === "match").map((note: Notice) => Number(note.from_id)));
     for (const note of fresh) {
       if (!announce || seenNotices.has(note.id)) continue;
       seenNotices.add(note.id);
       pendingRead.add(note.id);
       const inChat = state.view === "chat" && state.chatId === Number(note.from_id) && note.kind === "message";
-      if (inChat || state.user?.notify_enabled === false) continue;
+      if (shown.has(String(note.id)) || inChat || state.user?.notify_enabled === false ||
+        (note.kind === "like" && matchPeers.has(Number(note.from_id)))) continue;
+      shown.add(String(note.id));
+      try {
+        sessionStorage.setItem(noticeStorageKey(), JSON.stringify([...shown].slice(-100)));
+      } catch {
+        // The in-memory set still deduplicates SPA navigation.
+      }
       toast(note.body || tr("новое уведомление"), noticeAction(note));
       pingBrowser(note.body || tr("новое уведомление"));
     }
@@ -151,10 +170,11 @@ export function createInboxController({
   };
 
   const pollInbox = async () => {
-    if (!state.user) return;
+    const owner = state.user?.id;
+    if (!owner) return;
     try {
       const data = await api("/api/inbox");
-      await applyInbox(data);
+      if (state.user?.id === owner) await applyInbox(data);
     } catch {
       /* keep last counts */
     }

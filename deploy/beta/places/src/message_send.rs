@@ -116,8 +116,16 @@ impl Delivery {
                 && let Ok(response)=response.error_for_status() && let Ok(value)=response.json::<Value>().await
                 && let Some(data)=value["data"].as_array() {
                 for (token,ticket) in tokens.iter().zip(data) {
-                    if ticket["status"]=="error" && ticket["details"]["error"]=="DeviceNotRegistered" {gone_tokens.push(token.clone());}
+                    if ticket["status"]=="error" {
+                        match ticket["details"]["error"].as_str() {
+                            Some("DeviceNotRegistered") => gone_tokens.push(token.clone()),
+                            Some("InvalidCredentials") => eprintln!("Expo push rejected: InvalidCredentials (check APNs/FCM in EAS)"),
+                            _ => eprintln!("Expo push rejected by provider"),
+                        }
+                    }
                 }
+            } else {
+                eprintln!("Expo push request failed or returned an invalid response");
             }
         }
         if let Some(key)=key.and_then(|key|signing_key(&key)) {

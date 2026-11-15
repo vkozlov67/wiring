@@ -656,7 +656,7 @@ export function ProfileScreen({ host }: Props) {
                   disabled={jevBusy || (!user.jev_feed_available && !user.jev_feed_enabled)}
                   onChange={(enabled) => void setJevFeedEnabled(enabled)}
                 >
-                  {tr("Включить вкладку «Для тебя»")}</Checkbox> : <div role="group" aria-label={tr("Активация рекомендаций")} onKeyDown={(event) => {
+                  {tr("Включить вкладку «Для тебя»")}</Checkbox> : <div class={styles.recommendationsActivation} role="group" aria-label={tr("Активация рекомендаций")} onKeyDown={(event) => {
                   if (event.key === "Enter") { event.preventDefault(); void redeemRecommendations(); }
                 }}>
                   <p class={styles.recommendationsHint}>{tr("Доступ открывается по промокоду. После активации можно включить подбор.")}</p>

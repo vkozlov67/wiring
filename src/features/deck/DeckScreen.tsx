@@ -477,11 +477,9 @@ function DeckFeed({ host }: { host: DeckHostBridge & { user: NonNullable<DeckHos
 
   useEffect(() => {
     if (host.recommendations || !current || viewedRef.current.has(current.id)) return;
-    const controller = new AbortController();
-    void host.api("/api/feed/view", { method: "POST", signal: controller.signal, body: JSON.stringify({ target_id: current.id }) })
+    void host.api("/api/feed/view", { method: "POST", keepalive: true, body: JSON.stringify({ target_id: current.id }) })
       .then(() => { viewedRef.current.add(current.id); })
-      .catch(() => { /* Delivery was already reserved; a failed acknowledgement cannot cause repeats. */ });
-    return () => controller.abort();
+      .catch(() => { /* An unacknowledged card remains eligible for recovery. */ });
   }, [current?.id]);
 
   const saveDiscovery = async (discovery: DiscoveryDraft) => {

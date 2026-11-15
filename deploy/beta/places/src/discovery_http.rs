@@ -104,7 +104,7 @@ pub(crate) async fn read(db:&Writer, places:&PublicPlaces, profile:Arc<ProfileRu
                     }
                     return Ok(Outcome::Data(json!({"ok":true,"likes":likes,"plus":plus})));
                 }
-                let page=claim_delivery(tx,FeedClaim { uid,now,limit:filters.limit,include_delivered,
+                let page=claim_delivery(tx,FeedClaim { uid,now,limit:filters.limit,include_delivered,recover_unviewed:true,
                     candidates:eligible.into_iter().map(|(id,_)|id).collect() }).await?;
                 let mut cards=Vec::with_capacity(page.ids.len());
                 for id in page.ids { let card=profile.card(tx,id,now,lang).await?; if !card.is_null() { cards.push(card); } }
@@ -140,7 +140,7 @@ async fn candidates(tx:&Transaction<'_>, uid:i64, feed:bool, plus:bool, delivere
           AND NOT EXISTS(SELECT 1 FROM blocks b WHERE (b.from_id=$1 AND b.to_id=u.id) OR (b.from_id=u.id AND b.to_id=$1))
           AND (NOT $2 OR (COALESCE(u.paused,0)=0 AND COALESCE(u.report_banned_at,0)=0
                AND (COALESCE(u.incognito,0)=0 OR incoming.from_id IS NOT NULL)
-               AND NOT EXISTS(SELECT 1 FROM feed_history h WHERE h.user_id=$1 AND h.other_id=u.id AND (h.excluded_at IS NOT NULL OR NOT $8))
+               AND NOT EXISTS(SELECT 1 FROM feed_history h WHERE h.user_id=$1 AND h.other_id=u.id AND (h.excluded_at IS NOT NULL OR (NOT $8 AND h.viewed_at IS NOT NULL)))
                AND (NOT $9 OR NOT EXISTS(SELECT 1 FROM snoozes s WHERE s.user_id=$1 AND s.other_id=u.id AND s.until_at>$10::bigint))))
           AND (COALESCE(u.photo,'')<>'' OR EXISTS(SELECT 1 FROM photos p WHERE p.user_id=u.id))
         ORDER BY incoming.created_at DESC", &[&uid,&feed,&filters.age_min,&filters.age_max,&filters.city,&filters.gender,&filters.skip,&delivered,&plus,&now]).await?)

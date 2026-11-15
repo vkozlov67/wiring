@@ -291,7 +291,7 @@ export function LikesScreen({ host }: { host: LikesHostBridge }) {
           </section>
         ) : null}
         {filtersOpen ? <FilterPanel host={host} filters={filters} onApply={(next) => void apply(next)} onClear={clear} /> : null}
-        {likes.length ? <div class={styles.cards}>{sortedLikes.map((item, index) => <div key={item.id || `hidden-${index}`}>
+        {likes.length ? <div class={styles.cards}>{sortedLikes.map((item, index) => <div class={styles.cardSlot} key={item.id || `hidden-${index}`}>
           <LikeCardView host={host} item={item} onOpen={() => item.id && host.navigate("person", { id: item.id })} />
           {item.id && !item.hidden ? <div class={styles.cardActions}>
             <Button variant="ghost" slim disabled={busy} ariaLabel={tr("Скрыть: {0}", item.name || tr("анкету"))} onClick={() => { setError(""); setPendingPass(item); }}>{tr("Скрыть")}</Button>

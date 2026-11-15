@@ -17,9 +17,9 @@ const likes=[person,{id:3,name:'Лео',age:30},{hidden:true}];
 const matches=[{id:2,name:'Ада',age:29,unread:2,last_message:'Привет',last_at:1720000000}];
 if(params.has('stale'))localStorage.setItem('wiring-profile-draft-99',JSON.stringify({name:'',bio:'Старый черновик без имени'}));
 const user={name_change_available_at:params.has('locked')?Math.floor(Date.now()/1000)+86400:0,id:99,name:'Тест',age:28,plus:true,neuro:[],vibe:[],photos:[],city:'Белград'};
-const host={user,person,personFrom:'recommendations',mode:params.has('thread')?'chat':'matches',chatId:2,catalog:{places:[{country:'Сербия',cities:['Белград']},{country:'Черногория',cities:['Подгорица']}]},likes,matches,filters:{neuro:[],vibe:[],intents:[],min_age:18,max_age:99,city:''},basePath:'',matchesCount:0,
+const host={user,person,personFrom:'recommendations',mode:params.has('thread')?'chat':'matches',chatId:2,catalog:{report_reasons:[{id:'spam',label:'Спам'}],places:[{country:'Сербия',cities:['Белград']},{country:'Черногория',cities:['Подгорица']}]},likes,matches,filters:{neuro:[],vibe:[],intents:[],min_age:18,max_age:99,city:''},basePath:'',matchesCount:0,
 hrefFor:v=>'/'+v,navigate:v=>window.test.navigation.push(v),toast:()=>{},onLogout:()=>{},onUserUpdated:()=>{},onAction:id=>window.test.actions.push(id),loadLikes:async()=>({likes}),refreshUser:async()=>user,
-api:async(path,init)=>{window.test.calls.push({path,body:init?.body});if(path.startsWith('/api/messages/'))return {peer:{id:2,name:'Ада'},messages:Array.from({length:2000},(_,i)=>({id:i+1,from_id:2,body:'Сообщение '+i,created_at:1720000000})),openers:[]};if(path==='/api/support/replies')return {replies:[{id:1,source_kind:'report',body:'Жалобу проверили. Спасибо за обращение.',created_at:1720000000}]};if(path==='/api/me'&&init?.method==='PATCH'){const data=JSON.parse(init.body);if(params.has('conflict')&&typeof data.name==='string'){const error=Error('Сменить имя можно позднее');error.payload={name_change_available_at:Math.floor(Date.now()/1000)+86400};throw error;}if(typeof data.name==='string'&&data.name!==user.name){user.name=data.name;user.name_change_available_at=Math.floor(Date.now()/1000)+14*86400;}return {user:{...user}};}if(path==='/api/swipe'){if(window.test.fail)throw Error('Локальная ошибка');if(window.test.delay)await new Promise(resolve=>window.test.resolve=resolve);return {matched:true}};return {matches,user}},swipe:async()=>{}};
+api:async(path,init)=>{window.test.calls.push({path,body:init?.body});if(path.startsWith('/api/messages/'))return {peer:{id:2,name:'Ада'},messages:Array.from({length:2000},(_,i)=>({id:i+1,from_id:2,body:'Сообщение '+i,created_at:1720000000})),openers:[]};if(path==='/api/support/replies')return {replies:[{id:1,source_kind:'report',body:'Жалобу проверили. Спасибо за обращение.',created_at:1720000000}]};if(path==='/api/me'&&init?.method==='PATCH'){const data=JSON.parse(init.body);if(params.has('conflict')&&typeof data.name==='string'){const error=Error('Сменить имя можно позднее');error.payload={name_change_available_at:Math.floor(Date.now()/1000)+86400};throw error;}if(typeof data.name==='string'&&data.name!==user.name){user.name=data.name;user.name_change_available_at=Math.floor(Date.now()/1000)+14*86400;}return {user:{...user}};}if(path==='/api/swipe'){if(window.test.fail)throw Error('Локальная ошибка');if(window.test.delay)await new Promise(resolve=>window.test.resolve=resolve);return {matched:true}};return {matches,user}},swipe:async()=>{if(window.test.fail)throw Error('Скрытие не сохранилось');}};
 window.test.unmount=screen==='admin'?()=>{}:mod[{likes:'mountLikes',person:'mountPerson',profile:'mountProfile',chat:'mountChat',support:'mountSupport'}[screen]](document.getElementById('feature'),host);
 </script></body></html>`;
 const server=createServer(async(req,res)=>{
@@ -37,6 +37,13 @@ try{
  await page.route('**/*',route=>new URL(route.request().url()).origin===origin?route.continue():route.abort());
  const errors=[];page.on('pageerror',e=>errors.push(e.message));
  const open=async(screen,extra='')=>{await page.goto(origin+'/?screen='+screen+extra);await page.waitForFunction(()=>Boolean(window.test?.unmount));};
+ await page.setViewportSize({width:1100,height:900});
+ await open('likes');
+ const visibleCards = page.getByRole('link').filter({hasText:'Смотреть анкету'});
+ assert.equal(await visibleCards.count(),2);
+ const heights=await visibleCards.evaluateAll(cards=>cards.map(card=>card.getBoundingClientRect().height));
+ assert.ok(Math.abs(heights[0]-heights[1])<1, 'cards in the same row fill their slots');
+ await page.setViewportSize({width:390,height:844});
  await open('likes');
  assert.equal(await page.getByRole('button',{name:/^Лайк:/}).count(),2);
  await page.getByRole('button',{name:'Скрыть: Ада',exact:true}).click();
@@ -64,6 +71,23 @@ try{
  await page.evaluate(()=>{window.test.unmount();window.test.resolve();});
  await page.waitForTimeout(100);assert.deepEqual(await page.evaluate(()=>window.test.actions),[]);
  await open('person');
+ await page.evaluate(()=>window.test.fail=true);
+ await page.getByRole('button',{name:'Скрыть — больше не показывать'}).click();
+ const hide=page.getByRole('dialog',{name:'Больше не показывать?'});
+ const exclude=hide.getByRole('button',{name:'Исключить'});
+ await exclude.click();
+ await hide.getByRole('alert').filter({hasText:'Скрытие не сохранилось'}).waitFor();
+ assert.equal(await exclude.isEnabled(),true);
+ await page.evaluate(()=>window.test.fail=false);
+ await exclude.click();
+ await hide.waitFor({state:'hidden'});
+ await page.getByRole('button',{name:'пожаловаться',exact:true}).click();
+ const report=page.getByRole('dialog',{name:'Пожаловаться'});
+ await report.waitFor();
+ const details=report.getByRole('textbox');
+ assert.equal(await details.evaluate(field=>getComputedStyle(field).fontSize),'16px');
+ await details.fill('Тестовая жалоба');
+ await report.getByRole('button',{name:'отмена',exact:true}).click();
  assert.equal(await page.getByRole('heading',{name:'Ада, 29',exact:true}).locator('..').innerText().then(text=>text.includes('Клинический психолог')),false);
  await page.getByText('Клинический психолог',{exact:true}).waitFor();
  await page.getByText('Занятость',{exact:true}).waitFor();
@@ -78,6 +102,19 @@ try{
  assert.deepEqual(await page.evaluate(()=>window.test.navigation),['recommendations']);
  await open('person','&nojob=1');
  assert.equal(await page.getByText('Занятость',{exact:true}).count(),0);
+ for (const width of [320, 375]) {
+  await page.setViewportSize({width,height:812});
+  for (const screen of ['profile','support']) {
+   await open(screen);
+   const title = page.locator('header [aria-current="page"]');
+   const language = page.getByRole('button',{name:'Язык / Language',exact:true});
+   const titleBox = await title.boundingBox();
+   const languageBox = await language.boundingBox();
+   assert.ok(titleBox && languageBox && titleBox.x + titleBox.width <= languageBox.x,
+    `${screen} title must stay clear of language control at ${width}px`);
+  }
+ }
+ await page.setViewportSize({width:390,height:844});
  await open('profile');await page.getByRole('button',{name:'Страна',exact:true}).click();
  await page.getByRole('textbox',{name:'Найти страну',exact:true}).fill('черно');
  await page.waitForFunction(()=>document.querySelectorAll('[role=option]').length===1);

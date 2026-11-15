@@ -50,6 +50,11 @@ pub(crate) async fn serve(db:&Writer,delivery:&Delivery,profile:Arc<ProfileRules
                             SwipeResult::Applied{matched,was_match,liked}=>{
                                 let card=if matched {profile.card(tx,target,now,lang).await?} else {Value::Null};
                                 let target_email:&str=target_row.get(0); let target_lang:&str=target_row.get(1);
+                                if matched && !was_match {
+                                    tx.execute("UPDATE notifications SET \"read\"=1
+                                        WHERE kind='like' AND \"read\"=0 AND ((user_id=$1 AND from_id=$2) OR (user_id=$2 AND from_id=$1))",
+                                        &pair).await?;
+                                }
                                 let mut push=None;
                                 if like && !(matched&&was_match) && !seed && !demo(target_email) && target_row.get::<_,bool>(3) {
                                     let kind=if matched {"match"} else {"like"};

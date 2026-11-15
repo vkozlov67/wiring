@@ -48,3 +48,32 @@ test('a failed read acknowledgement is retried without repeating a match toast',
   assert.deepEqual(toasts, ['взаимно с Сашей']);
   assert.deepEqual(acknowledgements, [[7], [7]]);
 });
+
+test('a match replaces the older like and survives a reload before read acknowledgement', async () => {
+  globalThis.document = { title: 'WIRING' };
+  const storage = new Map();
+  globalThis.sessionStorage = {
+    getItem: key => storage.get(key) ?? null,
+    setItem: (key, value) => storage.set(key, value),
+  };
+  try {
+    const toasts = [];
+    const acknowledgements = [];
+    const openPage = () => createInboxController({
+      state: { view: 'deck', chatId: null, user: { id: 1 }, likesIn: 0, unread: 0, matches: [] },
+      root: { querySelectorAll: () => [] }, pageTitle: 'WIRING', pip: String,
+      api: async (_path, options) => acknowledgements.push(JSON.parse(options.body).ids),
+      toast: message => toasts.push(message), pingBrowser: () => {},
+    });
+    const data = { notices: [
+      { id: 8, kind: 'match', from_id: 2, body: 'Взаимный лайк' },
+      { id: 7, kind: 'like', from_id: 2, body: 'Новый лайк' },
+    ] };
+    await openPage().applyInbox(data);
+    await openPage().applyInbox(data);
+    assert.deepEqual(toasts, ['Взаимный лайк']);
+    assert.deepEqual(acknowledgements, [[8, 7], [8, 7]]);
+  } finally {
+    delete globalThis.sessionStorage;
+  }
+});

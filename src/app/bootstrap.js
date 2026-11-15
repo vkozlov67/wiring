@@ -277,7 +277,7 @@ import { initRegistrationAnalytics } from "./registration-analytics";
   const toast = showToast;
 
   const pingBrowser = (text) => {
-    if (state.user?.notify_enabled === false || state.user?.notify_push === false) return;
+    if (document.visibilityState === "visible" || state.user?.notify_enabled === false || state.user?.notify_push === false) return;
     void pingBrowserFallback(text);
   };
 
@@ -468,9 +468,12 @@ import { initRegistrationAnalytics } from "./registration-analytics";
     if (!card || state.busy) return;
     const targetId = card.id;
     state.busy = true;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 12000);
     try {
       const data = await api("/api/swipe", {
         method: "POST",
+        signal: controller.signal,
         body: JSON.stringify({ target_id: targetId, direction }),
       });
       const removedIndex = state.cards.findIndex((candidate) => candidate.id === targetId);
@@ -484,30 +487,27 @@ import { initRegistrationAnalytics } from "./registration-analytics";
       if (direction === "snooze") toast(tr("отложено на неделю"));
     } catch (err) {
       if (err?.payload?.matched && err.payload?.match?.id) {
-        toast(tr("{0} Чат в разделе «Чаты».", err.message));
-        state.busy = false;
-        render();
-        return;
+        throw new Error(tr("{0} Чат в разделе «Чаты».", err.message));
       }
-      toast(err.message);
+      if (controller.signal.aborted) throw new Error(tr("сервер временно недоступен"));
+      throw err;
+    } finally {
+      clearTimeout(timeout);
       state.busy = false;
-      render();
-      return;
     }
-    if (state.view === "person") {
-      state.person = null;
-      state.view = state.personFrom === "likes" ? "likes" : state.personFrom === "archive" ? "archive" : state.personFrom === "recommendations" ? "recommendations" : "deck";
-      if (state.view === "likes") {
-        await loadLikes();
-        await refreshMe();
-      } else {
-        if (state.view === "deck" && !state.cards.length && state.feedHasMore) await loadFeed();
-      }
-    } else {
-      if (state.view === "deck" && !state.cards.length && state.feedHasMore) await loadFeed();
-    }
-    state.busy = false;
+    if (state.view !== "person" || state.person?.id !== targetId) return;
+    state.person = null;
+    state.view = state.personFrom === "likes" ? "likes" : state.personFrom === "archive" ? "archive" : state.personFrom === "recommendations" ? "recommendations" : "deck";
+    const destination = state.view;
+    if (destination === "likes") state.likes = state.likes.filter(candidate => candidate.id !== targetId);
     render();
+
+    // A refresh may be slow or fail after the decision was already saved.
+    if (destination === "likes") {
+      void Promise.all([loadLikes(), refreshMe()]).then(() => {
+        if (state.view === destination) render();
+      }).catch(() => {});
+    }
   };
 
   const openChat = async (id) => {
@@ -530,7 +530,7 @@ import { initRegistrationAnalytics } from "./registration-analytics";
     refreshMe,
     render: () => render(),
   });
-  const { applyInbox, pollInbox, start: startInbox, stop: stopInbox } = inboxController;
+  const { applyInbox, pollInbox, syncChrome, start: startInbox, stop: stopInbox } = inboxController;
 
   const resumeApp = async () => {
     if (!state.user) return;
@@ -953,7 +953,7 @@ import { initRegistrationAnalytics } from "./registration-analytics";
     }
     syncUrl();
     if (state.view === "deck" && state.user && !state.cards.length) await loadFeed();
-    if (state.view === "matches" && state.user) void refreshMe().catch(() => {});
+    if (state.view === "matches" && state.user) void refreshMe().then(syncChrome).catch(() => {});
     if (state.view === "likes" && state.user) {
       await Promise.all([loadLikes(), refreshMe()]);
     }
