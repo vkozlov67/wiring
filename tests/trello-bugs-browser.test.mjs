@@ -20,7 +20,7 @@ const person = { ...user, bio: 'Строка один\nСтрока два', com
 const catalog = {
   places: [{ country: 'Сербия', cities: ['Белград'] }],
   neuro: [{ id: 'asd', label: 'РАС (ASD)' }, { id: 'adhd', label: 'СДВГ (ADHD)' }],
-  vibe: [], intents: [{ id: 'friends', label: 'дружба' }], prompts: [],
+  vibe: [], intents: [{ id: 'friends', label: 'дружба' }, { id: 'dating', label: 'знакомства' }], prompts: [],
   genders: [{ id: 'woman', label: 'женщина' }], looking_for: [{ id: 'everyone', label: 'всех' }], limits: { photos: 6 },
 };
 const calls = [];
@@ -52,7 +52,7 @@ const server = createServer(async (req, res) => {
     } else if (url.pathname === '/api/catalog') data = { ok: true, ...catalog };
     else if (url.pathname === '/api/inbox') data = { ok: true, unread: 0, unread_chats: 0, likes_in: 0, notices: [] };
     else if (url.pathname === '/api/recommendations') data = {
-      ok: true, cards: [{ ...person, recommendation_reasons: [`Общие отметки о диагнозах: ${user.neuro.map(id => id === 'asd' ? 'РАС (ASD)' : 'СДВГ (ADHD)').join(', ')}`] }],
+      ok: true, cards: [{ ...person, recommendation_reasons: [`Общая цель: ${user.intents.map(id => id === 'friends' ? 'дружба' : 'знакомства').join(', ')}`] }],
       has_more: false, generation: 0, recommendation_source: 'taste',
     };
     else if (url.pathname === '/api/messages' && req.method === 'POST') {
@@ -112,25 +112,30 @@ if (process.env.FIXTURE_ONLY === '1') {
     await page.getByRole('region', { name: 'Почему может подойти' }).waitFor();
     const previewBio = page.getByText('Строка один Строка два', { exact: true });
     assert.equal(await previewBio.evaluate(el => getComputedStyle(el).whiteSpace), 'pre-wrap');
-    assert.match(await page.getByRole('region', { name: 'Почему может подойти' }).innerText(), /РАС/);
+    assert.match(await page.getByRole('region', { name: 'Почему может подойти' }).innerText(), /дружба/);
     await page.locator('.tabbar a[data-nav=profile]').click();
     await page.getByRole('link', { name: 'Редактировать анкету', exact: true }).click();
-    await page.getByRole('button', { name: 'РАС (ASD)', exact: true }).click();
-    await page.getByRole('button', { name: 'СДВГ (ADHD)', exact: true }).click();
-    await page.waitForFunction(() => document.querySelector('[aria-label="Особенности — по желанию"] button[aria-pressed=true]')?.textContent.includes('СДВГ'));
+    assert.equal(await page.getByRole('heading', { name: 'Мои особенности', exact: true }).count(), 0);
+    assert.equal(await page.getByRole('button', { name: 'РАС (ASD)', exact: true }).count(), 0);
+    await page.getByRole('button', { name: 'дружба', exact: true }).click();
+    await page.getByRole('button', { name: 'знакомства', exact: true }).click();
+    await page.waitForFunction(() => {
+      const pressed = [...document.querySelectorAll('button[aria-pressed=true]')].map((el) => el.textContent || '');
+      return pressed.some((label) => label.includes('знакомства')) && !pressed.some((label) => label.includes('дружба'));
+    });
     await new Promise(resolve => {
       const poll = setInterval(() => {
-        if (calls.some(call => call.method === 'PATCH' && call.path === '/api/me' && JSON.parse(call.body).neuro?.join() === 'adhd')) { clearInterval(poll); resolve(); }
+        if (calls.some(call => call.method === 'PATCH' && call.path === '/api/me' && JSON.parse(call.body).intents?.join() === 'dating')) { clearInterval(poll); resolve(); }
       }, 25);
       setTimeout(() => { clearInterval(poll); resolve(); }, 5000).unref();
     });
-    assert.deepEqual(user.neuro, ['adhd'], 'profile autosave must reach the API before returning');
+    assert.deepEqual(user.intents, ['dating'], 'profile autosave must reach the API before returning');
     const previousLoads = calls.filter(call => call.path === '/api/recommendations').length;
     await page.locator('.tabbar a[data-nav=recommendations]').click();
     await page.getByRole('region', { name: 'Почему может подойти' }).waitFor();
     const reasons = await page.getByRole('region', { name: 'Почему может подойти' }).innerText();
-    assert.match(reasons, /СДВГ/);
-    assert.doesNotMatch(reasons, /РАС/);
+    assert.match(reasons, /знакомства/);
+    assert.doesNotMatch(reasons, /дружба/);
     assert.equal(calls.filter(call => call.path === '/api/recommendations').length, previousLoads + 1);
 
     await page.goto(origin + '/me/edit');

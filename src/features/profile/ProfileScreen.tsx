@@ -16,7 +16,7 @@ import {
 } from "@/components/ui";
 import { getErrorMessage } from "@/lib/get-error-message";
 import { isProfilePhotoFile, PROFILE_PHOTO_ACCEPT } from "@/lib/profile-photo-file";
-import { applyNeuroToggle, splitCatalogTags } from "@/lib/catalog-tags";
+import { splitCatalogTags } from "@/lib/catalog-tags";
 import { countryForCity, countrySelectOptions } from "@/lib/places";
 import { profileMenuAvatarUrl } from "@/lib/profile-photo";
 import type { CatalogItem, ProfileHostBridge, ProfilePhoto, ProfileUser } from "./types";
@@ -494,7 +494,6 @@ export function ProfileScreen({ host }: Props) {
           <Input label={tr("Имя")} name="name" value={draft.name} error={errors.name} onInput={event => setField("name", event.currentTarget.value)} />
           <Input label={tr("Возраст")} name="age" type="number" min={18} max={99} value={draft.age} error={errors.age} onInput={event => setField("age", event.currentTarget.value)} />
           <PhotoManager compact host={host} user={user} onChange={next => { setUser(next); host.onUserUpdated(next); if (allPhotos(next).length || next.photo) setErrors(current => ({ ...current, photos: "" })); }} />
-          {draft.neuro.length > 0 && <Checkbox name="special_data_consent" checked={draft.specialConsent} onChange={value => setField("specialConsent", value)}>{tr("Согласен(на) на обработку и показ выбранных особенностей")}</Checkbox>}
           {errors.photos && <p class={styles.error}>{errors.photos}</p>}
           {serverError && <p class={styles.error} role="alert">{serverError}</p>}
           {saveState.phase === "error" && <p class={styles.error}>{saveState.error}</p>}
@@ -620,12 +619,7 @@ export function ProfileScreen({ host }: Props) {
             </section>
 
             <section class={styles.section}>
-              <div class={styles.sectionTitle}><h2>{tr("Мои особенности")}</h2><span>{tr("по желанию")}</span></div>
-              <TagPicker options={host.catalog.neuro || []} selected={draft.neuro} onChange={(value) => { setField("neuro", applyNeuroToggle(draft.neuro, value)); setErrors((current) => ({ ...current, neuro: "" })); }} label={tr("Особенности — по желанию")} />
-              {errors.neuro && <p class={styles.error}>{errors.neuro}</p>}
-              {draft.neuro.length > 0 && <Checkbox name="special_data_consent" checked={draft.specialConsent} onChange={value => setField("specialConsent", value)}>{tr("Согласен(на) на обработку и показ выбранных особенностей")}</Checkbox>}
               <TagPicker options={host.catalog.vibe || []} selected={draft.vibe} onChange={(value) => setField("vibe", value)} label={tr("Как ты устроен(а) и как тебе комфортнее общаться")} tone="vibe" />
-              <p class={styles.disclaimer}>{tr("Диагнозы не проверяем: люди указывают их сами. Если заметим ложь, аккаунт может быть забанен.")}</p>
               <TagPicker options={host.catalog.intents || []} selected={draft.intents} onChange={(value) => setField("intents", value)} label={tr("Зачем ты здесь — можно несколько сразу; формат общения решаете в переписке")} />
             </section>
 
