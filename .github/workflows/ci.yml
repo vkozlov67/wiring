@@ -32,6 +32,15 @@ jobs:
       - name: Test frontend and the Rust HTTP API
         run: ./scripts/test.sh
 
+      - name: Verify the local developer launch
+        run: |
+          trap './scripts/dev.sh stop' EXIT
+          ./scripts/dev.sh
+          curl -fsS http://127.0.0.1:5070/health | python3 -c 'import json,sys; assert json.load(sys.stdin)["ok"] is True'
+          curl -fsS -H 'Content-Type: application/json' \
+            -d '{"email":"dev@wiring.test","password":"wiring-dev"}' http://127.0.0.1:5070/api/login \
+            | python3 -c 'import json,sys; assert json.load(sys.stdin)["user"]["email"] == "dev@wiring.test"'
+
       - name: Build the release used by production
         run: |
           deploy/build-rust-release.sh "$RUNNER_TEMP/release/rust"
