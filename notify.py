@@ -12,6 +12,7 @@ import smtplib
 import time
 
 from database import Connection
+import social_backend
 from push import push_target, send_user_push
 import urllib.error
 import urllib.request
@@ -53,6 +54,19 @@ def unread_notices(conn: Connection, user_id: int, limit: int = 8) -> list[dict[
         """,
         (user_id, limit),
     ).fetchall()
+    return _render_notices(rows)
+
+
+def fetch_unread_notices(conn: Connection, user_id: int, limit: int = 8) -> list[dict[str, Any]]:
+    if social_backend.NOTICES_URL:
+        try:
+            return _render_notices(social_backend.notices("list", user_id, limit=limit))
+        except social_backend.BACKEND_ERRORS:
+            pass
+    return unread_notices(conn, user_id, limit)
+
+
+def _render_notices(rows) -> list[dict[str, Any]]:
     return [
         {
             "id": row["id"],
@@ -163,6 +177,13 @@ def _recipient_language(function):
     return wrapped
 
 
+def message_notice_body(from_name: str, preview: str) -> str:
+    snippet = " ".join((preview or "").split())
+    if len(snippet) > 80:
+        snippet = snippet[:79] + "…"
+    return f"{from_name}: {snippet}" if snippet else tr("{0} написал(а)", from_name)
+
+
 @_recipient_language
 def notify_event(
     conn: Connection,
@@ -175,27 +196,26 @@ def notify_event(
     from_name: str,
     preview: str = "",
     last_seen: int = 0,
+    stored_message_notice: bool | None = None,
 ) -> None:
     if kind == "like":
         body = tr("{0} лайкнул(а) тебя", from_name)
         subject = tr("Тебя лайкнули на WIRING")
         mail = tr("{0} лайкнул(а) твою анкету. Открыть: https://wiring.date/", from_name)
     elif kind == "message":
-        snippet = " ".join((preview or "").split())
-        if len(snippet) > 80:
-            snippet = snippet[:79] + "…"
-        body = f"{from_name}: {snippet}" if snippet else tr("{0} написал(а)", from_name)
+        body = message_notice_body(from_name, preview)
         subject = tr("Новое сообщение на WIRING")
         mail = tr("{0} написал(а) тебе. Открыть чат: https://wiring.date/", from_name)
-        existing = conn.execute(
+        existing = None if stored_message_notice is not None else conn.execute(
             "SELECT id FROM notifications WHERE user_id = ? AND kind = 'message' AND from_id = ? AND read = 0",
             (user_id, from_id),
         ).fetchone()
-        if existing:
-            conn.execute(
-                "UPDATE notifications SET body = ?, created_at = ? WHERE id = ?",
-                (body[:280], int(time.time()), existing["id"]),
-            )
+        if existing or stored_message_notice:
+            if existing:
+                conn.execute(
+                    "UPDATE notifications SET body = ?, created_at = ? WHERE id = ?",
+                    (body[:280], int(time.time()), existing["id"]),
+                )
             send_user_push(
                 conn,
                 user_id,
@@ -209,7 +229,8 @@ def notify_event(
         body = tr("взаимно с {0}", from_name)
         subject = tr("Мэтч на WIRING")
         mail = tr("Взаимно с {0}. Можно писать: https://wiring.date/", from_name)
-    add_notice(conn, user_id, kind, from_id, body)
+    if stored_message_notice is None:
+        add_notice(conn, user_id, kind, from_id, body)
     send_user_push(
         conn,
         user_id,

@@ -1,186 +1,102 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REMOTE_HOST="${REMOTE_HOST:-root@164.92.147.23}"
-REMOTE_PORT="${REMOTE_PORT:-22}"
-REMOTE_DIR="${REMOTE_DIR:-/root/repos/dating}"
-SERVICE_NAME="wiring.service"
-SSH_OPTIONS=(-p "$REMOTE_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes)
-RSYNC_SSH="ssh -p $REMOTE_PORT -o BatchMode=yes -o StrictHostKeyChecking=yes"
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+host=${REMOTE_HOST:-root@164.92.147.23}
+port=${REMOTE_PORT:-22}
+ssh_opts=(-p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes)
+rsync_ssh="ssh -p $port -o BatchMode=yes -o StrictHostKeyChecking=yes"
 
-# rsync --delete must not remove a landing omitted from the source checkout.
-for required_file in templates/landing.html public/landing.css public/landing.js; do
-  if [ ! -f "$SCRIPT_DIR/$required_file" ]; then
-    echo "Deploy aborted: missing /m landing file $required_file"
-    exit 1
-  fi
+if [[ -n "${WIRING_RUST_RELEASE_DIR:-}" ]]; then
+  artifact=$WIRING_RUST_RELEASE_DIR
+else
+  artifact=$(mktemp -d "${TMPDIR:-/tmp}/wiring-build.XXXXXXXX")
+  trap 'rm -rf "$artifact"' EXIT
+  "$root/deploy/build-rust-release.sh" "$artifact"
+fi
+for path in "$artifact/wiring-beta-places" "$root/public/dist/app.js" "$root/public/landing.css" "$root/public/landing.js"; do
+  test -s "$path" || { printf 'Missing release file: %s\n' "$path" >&2; exit 1; }
 done
+test -d "$artifact/catalog"
+test -d "$artifact/documents"
 
-echo "== Sync files to $REMOTE_HOST:$REMOTE_DIR =="
-ssh "${SSH_OPTIONS[@]}" "$REMOTE_HOST" "mkdir -p '$REMOTE_DIR'"
-ssh "${SSH_OPTIONS[@]}" "$REMOTE_HOST" bash -s <<'PRE'
-set -euo pipefail
-ENV_FILE=/etc/wiring.env
-umask 077
-touch "$ENV_FILE"
-chmod 600 "$ENV_FILE"
-if ! grep -q '^DATABASE_URL=' "$ENV_FILE" && [ -f /root/repos/dating/.env ]; then
-  grep '^DATABASE_URL=' /root/repos/dating/.env >> "$ENV_FILE" || true
-fi
-if ! grep -q '^OPENAI_API_KEY=' "$ENV_FILE" && [ -f /root/repos/dating/.env ]; then
-  grep '^OPENAI_API_KEY=' /root/repos/dating/.env >> "$ENV_FILE" || true
-fi
-if ! grep -q '^ADMIN_TOKEN=' "$ENV_FILE"; then
-  printf 'ADMIN_TOKEN=%s\n' "$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')" >> "$ENV_FILE"
-fi
-PRE
-rsync -az --delete \
-  -e "$RSYNC_SSH" \
-  --exclude '.git' \
-  --exclude '__pycache__/' \
-  --exclude '*.pyc' \
-  --exclude '.venv/' \
-  --exclude 'venv/' \
-  --exclude 'node_modules/' \
-  --exclude 'data/' \
-  --exclude '.env' \
-  --exclude '.env.*' \
-  --exclude '.DS_Store' \
-  "$SCRIPT_DIR/" "$REMOTE_HOST:$REMOTE_DIR/"
-
-echo "== Install service and nginx =="
-ssh "${SSH_OPTIONS[@]}" "$REMOTE_HOST" bash -s <<EOF
-set -euo pipefail
-REMOTE_DIR='$REMOTE_DIR'
-SERVICE_NAME='$SERVICE_NAME'
-
-mkdir -p /var/lib/wiring/uploads
-chmod 750 /var/lib/wiring /var/lib/wiring/uploads
-mkdir -p /var/www/wiring-downloads
-chmod 755 /var/www/wiring-downloads
-
-. /root/bots/bin/activate
-pip install -q -r "\$REMOTE_DIR/requirements.txt"
-if command -v npm >/dev/null && [ -f "\$REMOTE_DIR/package.json" ]; then
-  (cd "\$REMOTE_DIR" && npm ci && npm run build)
-fi
-
-ENV_FILE=/etc/wiring.env
-umask 077
-touch "\$ENV_FILE"
-chmod 600 "\$ENV_FILE"
-if ! grep -q '^APP_SECRET_KEY=' "\$ENV_FILE"; then
-  printf 'APP_SECRET_KEY=%s\n' "\$(python3 -c 'import secrets; print(secrets.token_hex(32))')" >> "\$ENV_FILE"
-fi
-if ! grep -q '^DATABASE_URL=' "\$ENV_FILE" && [ -f /root/repos/dating/.env ]; then
-  grep '^DATABASE_URL=' /root/repos/dating/.env >> "\$ENV_FILE" || true
-fi
-if ! grep -q '^OPENAI_API_KEY=' "\$ENV_FILE" && [ -f /root/repos/dating/.env ]; then
-  grep '^OPENAI_API_KEY=' /root/repos/dating/.env >> "\$ENV_FILE" || true
-fi
-if ! grep -q '^ADMIN_TOKEN=' "\$ENV_FILE"; then
-  printf 'ADMIN_TOKEN=%s\n' "\$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')" >> "\$ENV_FILE"
-fi
-
-if ! grep -q '^DATABASE_URL=' "\$ENV_FILE"; then
-  if id -u postgres >/dev/null 2>&1; then
-    systemctl start postgresql || true
-    PG_PASS="\$(python3 -c 'import secrets; print(secrets.token_urlsafe(18))')"
-    su - postgres -c "psql -tc \"SELECT 1 FROM pg_roles WHERE rolname='wiring_app'\"" | grep -q 1 || \
-      su - postgres -c "psql -c \"CREATE USER wiring_app WITH PASSWORD '\$PG_PASS';\""
-    su - postgres -c "psql -tc \"SELECT 1 FROM pg_database WHERE datname='wiring'\"" | grep -q 1 || \
-      su - postgres -c "psql -c \"CREATE DATABASE wiring OWNER wiring_app;\""
-    printf 'DATABASE_URL=postgresql://wiring_app:%s@127.0.0.1:5432/wiring\n' "\$PG_PASS" >> "\$ENV_FILE"
-  fi
-fi
-
-install -m 644 "\$REMOTE_DIR/deploy/wiring.service" /etc/systemd/system/\$SERVICE_NAME
-install -m 644 "\$REMOTE_DIR/deploy/wiring-purge.service" /etc/systemd/system/wiring-purge.service
-install -m 644 "\$REMOTE_DIR/deploy/wiring-purge.timer" /etc/systemd/system/wiring-purge.timer
-install -m 644 "\$REMOTE_DIR/deploy/wiring-sendpulse.service" /etc/systemd/system/wiring-sendpulse.service
-install -m 644 "\$REMOTE_DIR/deploy/wiring-sendpulse.timer" /etc/systemd/system/wiring-sendpulse.timer
-install -m 644 "\$REMOTE_DIR/deploy/wiring-registrations.service" /etc/systemd/system/wiring-registrations.service
-install -m 644 "\$REMOTE_DIR/deploy/wiring-registrations.timer" /etc/systemd/system/wiring-registrations.timer
-install -m 644 "\$REMOTE_DIR/deploy/nginx-dating.conf" /etc/nginx/snippets/dating.conf
-install -m 644 "\$REMOTE_DIR/deploy/nginx-cloudflare-realip.conf" /etc/nginx/conf.d/cloudflare-realip.conf
-install -m 644 "\$REMOTE_DIR/deploy/nginx-wiring.conf" /etc/nginx/sites-available/wiring.conf
-ln -sfn /etc/nginx/sites-available/wiring.conf /etc/nginx/sites-enabled/wiring.conf
-install -m 644 "\$REMOTE_DIR/deploy/nginx-wiring.date.conf" /etc/nginx/sites-available/wiring.date.conf
-rm -f /etc/nginx/sites-enabled/wiring.date.conf
-systemctl daemon-reload
-systemctl enable "\$SERVICE_NAME"
-systemctl enable --now wiring-purge.timer
-systemctl enable --now wiring-sendpulse.timer
-systemctl enable --now wiring-registrations.timer
-systemctl restart "\$SERVICE_NAME"
-
-# The old lizaisyourfriend.lol/dating redirect lives only where that site is hosted.
-NGINX_CONF=/etc/nginx/sites-available/lizaisyourfriend.lol.conf
-if [ -f "\$NGINX_CONF" ] && ! grep -qF 'include /etc/nginx/snippets/dating.conf;' "\$NGINX_CONF"; then
-  cp "\$NGINX_CONF" "\$NGINX_CONF.before-dating"
-  python3 - <<'PY'
-from pathlib import Path
-path = Path("/etc/nginx/sites-available/lizaisyourfriend.lol.conf")
-text = path.read_text()
-needle = "    include /etc/nginx/snippets/hladom.conf;\n"
-insert = needle + "    include /etc/nginx/snippets/dating.conf;\n"
-if "include /etc/nginx/snippets/dating.conf;" in text:
-    print("nginx dating snippet already present")
-elif needle not in text:
-    raise SystemExit("Could not find hladom include to insert after")
-else:
-    path.write_text(text.replace(needle, insert, 1))
-    print("nginx dating snippet inserted")
-PY
-fi
-nginx -t
-systemctl reload nginx
-
-HEALTHY=0
-for i in \$(seq 1 25); do
-  if curl -sf http://127.0.0.1:5070/health >/dev/null 2>&1; then
-    HEALTHY=1
-    break
-  fi
-  sleep 1
-done
-
-if [ "\$HEALTHY" -ne 1 ]; then
-  echo "Health check failed after 25s! Service status and recent logs:"
-  systemctl --no-pager --full status "\$SERVICE_NAME" || true
-  journalctl -u "\$SERVICE_NAME" -n 60 --no-pager || true
+candidate=$(ssh "${ssh_opts[@]}" "$host" bash -se <<'REMOTE'
+test "$(uname -m)" = x86_64
+test -L /opt/wiring-places/current
+test -d /var/www/wiring-static
+systemctl is-active --quiet wiring-places.service
+test "$(systemctl show -p ActiveState --value wiring.service)" = inactive
+test "$(systemctl show -p UnitFileState --value wiring.service)" = disabled
+mktemp -d /opt/wiring-places/releases/release.XXXXXXXX
+REMOTE
+)
+if [[ ! "$candidate" =~ ^/opt/wiring-places/releases/release\.[[:alnum:]]{8}$ ]]; then
+  printf 'Server did not return a Rust release directory\n' >&2
   exit 1
 fi
+rsync -rlt --no-links -e "$rsync_ssh" "$artifact/wiring-beta-places" "$artifact/catalog" "$artifact/documents" "$root/deploy/check-flask-retirement.sh" "$host:$candidate/"
+rsync -rlt --no-links --exclude='.*' --chmod=D755,F644 -e "$rsync_ssh" "$root/public/" "$host:$candidate/site-static/"
 
-curl -sf http://127.0.0.1:5070/health
-echo
-systemctl --no-pager --full status "\$SERVICE_NAME" | head -20
-EOF
-
-echo "== Public check =="
-date_headers="$(curl -sI "https://wiring.date/")"
-printf '%s\n' "$date_headers" | head -15
-printf '%s\n' "$date_headers" | grep -Eqi '^location: https://wiring.club/' || {
-  echo "wiring.date did not redirect to wiring.club"
-  exit 1
+ssh "${ssh_opts[@]}" "$host" bash -s -- "$candidate" <<'REMOTE'
+set -eEuo pipefail
+candidate=$1
+current=/opt/wiring-places/current
+static=/var/www/wiring-static
+wait_for_rust() {
+  for _ in {1..25}; do
+    if curl -fsS --max-time 2 http://127.0.0.1:5082/health >/dev/null; then return; fi
+    sleep 1
+  done
+  return 1
 }
-printf '%s\n' "$date_headers" | grep -Eq '^HTTP/.* (301|308)' || {
-  echo "wiring.date did not return a permanent redirect"
-  exit 1
+exec 9>/run/lock/wiring-cutover.lock
+flock -n 9
+# The release might have waited for another deploy to finish.
+previous=$(readlink -f "$current")
+bash "$candidate/check-flask-retirement.sh" --expect-stopped
+test -d "$candidate/catalog"
+test -d "$candidate/documents"
+test -s "$candidate/site-static/dist/app.js"
+chmod 755 "$candidate" "$candidate/wiring-beta-places"
+chmod -R a+rX "$candidate/catalog" "$candidate/documents"
+static_backup=$(mktemp -d /var/www/.wiring-static-before.XXXXXXXX)
+cp -al "$static/." "$static_backup/"
+activate() {
+  ln -sfn "$1" "$candidate/current-link" &&
+    mv -Tf "$candidate/current-link" "$current"
 }
-echo
-curl -sI "https://wiring.club/" | head -15
-echo
-landing_html="$(curl -fsS "https://wiring.club/m")"
-if ! grep -q 'id="hero-title"' <<< "$landing_html"; then
-  echo "Mobile landing /m did not render"
-  exit 1
-fi
-for asset in landing.css landing.js; do
-  curl -fsS -o /dev/null "https://wiring.club/public/$asset"
+sync_static() {
+  rsync -rlt --checksum --delay-updates --delete-delay --no-links --chmod=D755,F644 "$1/" "$static/"
+}
+rollback() {
+  local code=$?
+  trap - ERR
+  set +e
+  if activate "$previous" && sync_static "$static_backup" &&
+     systemctl restart wiring-places.service && wait_for_rust; then
+    printf 'Rust release failed; restored %s and the previous frontend\n' "$previous" >&2
+  else
+    printf 'Restore did not complete; previous release: %s; frontend snapshot: %s\n' "$previous" "$static_backup" >&2
+  fi
+  exit "$code"
+}
+trap rollback ERR
+activate "$candidate"
+sync_static "$candidate/site-static"
+systemctl restart wiring-places.service
+wait_for_rust
+bash "$candidate/check-flask-retirement.sh" --expect-stopped
+for path in /m /public/dist/app.js /public/landing.css /public/landing.js; do
+  curl -fsS --max-time 8 --resolve wiring.club:443:127.0.0.1 "https://wiring.club$path" -o /dev/null
 done
-echo "Mobile landing /m and its assets are available"
-printf '%s' "$landing_html" | python3 "$SCRIPT_DIR/scripts/check_apk_downloads.py" "https://wiring.club/m"
-echo
-echo "Deploy complete: https://wiring.club/"
+trap - ERR
+rm -rf "$static_backup"
+printf 'Published Rust and frontend: %s (previous: %s)\n' "$candidate" "$previous"
+REMOTE
+
+date_headers=$(curl -fsSI --max-time 10 https://wiring.date/)
+grep -Eqi '^location: https://wiring.club/' <<< "$date_headers"
+grep -Eq '^HTTP/.* (301|308)' <<< "$date_headers"
+landing_html=$(curl -fsS --max-time 10 https://wiring.club/m)
+grep -q 'id="hero-title"' <<< "$landing_html"
+printf '%s' "$landing_html" | python3 "$root/scripts/check_apk_downloads.py" https://wiring.club/m

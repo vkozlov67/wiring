@@ -490,6 +490,18 @@ CITY_SET: set[str] = _build_city_set()
 _CITY_COUNTRY = {str(city): str(block['country']) for block in PLACES for city in block['cities']}
 
 
+def _legacy_city_index() -> dict[str, str]:
+    index: dict[str, str] = {}
+    for city in CITY_SET:
+        key = _key(city)
+        index.setdefault(key, city)
+        index.setdefault(key.replace(' ', ''), city)
+    return index
+
+
+_LEGACY_CITY_INDEX = _legacy_city_index()
+
+
 def _legacy_city(value: str) -> str | None:
     key = _key(value)
     compact = key.replace(' ', '')
@@ -497,7 +509,7 @@ def _legacy_city(value: str) -> str | None:
         return _ALIASES[key]
     if compact in _ALIASES:
         return _ALIASES[compact]
-    return next((city for city in CITY_SET if _key(city) == key or _key(city).replace(' ', '') == compact), None)
+    return _LEGACY_CITY_INDEX.get(compact)
 
 
 def _preserve_legacy(value: str) -> str:

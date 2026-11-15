@@ -46,6 +46,24 @@ jobs:
       - name: Run full test suite
         run: ./scripts/test.sh
 
+      - name: Test the Rust server
+        run: docker build --target rust-test -f deploy/beta/Dockerfile .
+
+      - name: Build the release used by production
+        run: |
+          deploy/build-rust-release.sh "$RUNNER_TEMP/release/rust"
+          mkdir -p "$RUNNER_TEMP/release/frontend"
+          cp -a public/dist/. "$RUNNER_TEMP/release/frontend/"
+          tar -C "$RUNNER_TEMP/release" -czf "$RUNNER_TEMP/wiring-release.tar.gz" rust frontend
+
+      - name: Save the tested release
+        uses: actions/upload-artifact@v4
+        with:
+          name: wiring-release
+          path: ${{ runner.temp }}/wiring-release.tar.gz
+          if-no-files-found: error
+          retention-days: 5
+
   deploy:
     needs: test
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -54,13 +72,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/download-artifact@v4
         with:
-          node-version: "20"
-          cache: npm
+          name: wiring-release
+          path: ${{ runner.temp }}
 
-      - name: Build frontend for rsync
-        run: npm ci && npm run build
+      - name: Unpack the tested release
+        run: |
+          mkdir -p "$RUNNER_TEMP/release" public/dist
+          tar -xzf "$RUNNER_TEMP/wiring-release.tar.gz" -C "$RUNNER_TEMP/release"
+          cp -a "$RUNNER_TEMP/release/frontend/." public/dist/
 
       - name: Configure SSH
         env:
@@ -79,4 +100,4 @@ jobs:
         env:
           REMOTE_HOST: root@${{ vars.DEPLOY_HOST || '164.92.147.23' }}
           REMOTE_PORT: ${{ vars.DEPLOY_SSH_PORT || '22' }}
-        run: ./deploy.sh
+        run: WIRING_RUST_RELEASE_DIR="$RUNNER_TEMP/release/rust" ./deploy.sh

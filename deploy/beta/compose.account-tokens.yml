@@ -1,0 +1,9 @@
+services:
+  edge:
+    volumes:
+      - ./Caddyfile.account-tokens:/etc/caddy/Caddyfile:ro
+  places:
+    image: wiring-beta-places:public-account-tokens
+    environment:
+      WIRING_PUBLIC_ACCOUNT_TOKENS: "1"
+      WIRING_PUBLIC_NATIVE_OAUTH_EXCHANGE: "1"

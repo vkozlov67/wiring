@@ -1,0 +1,22 @@
+http://beta.wiring.club {
+	@public_documents path /api/push/device /health /api/catalog /api/app-config /api/inbox /api/notices/read /api/auth/refresh /api/auth/logout /account-deletion /child-safety /privacy /legal /rules /marketing /glossary /robots.txt /sitemap.xml /.well-known/apple-app-site-association /.well-known/assetlinks.json
+	@spa path_regexp spa ^/($|sign-in$|sign-up$|login$|register$|forgot$|reset$|verify$|feed$|for-you$|likes$|chats($|/[0-9]+$)|me($|/edit$)|consents$|plus$|premium$|onboard$|delete-account$|notifications$|archive$|p/[0-9]+$|r/[^/]+$)
+	handle @public_documents {
+		reverse_proxy places:5082 {
+			header_up X-Forwarded-For {http.request.header.X-Forwarded-For}
+			header_up X-Forwarded-Proto https
+		}
+	}
+	handle @spa {
+		reverse_proxy places:5082 {
+			header_up X-Forwarded-For {http.request.header.X-Forwarded-For}
+			header_up X-Forwarded-Proto https
+		}
+	}
+	handle {
+		reverse_proxy flask:5070 {
+			header_up X-Forwarded-For {http.request.header.X-Forwarded-For}
+			header_up X-Forwarded-Proto https
+		}
+	}
+}

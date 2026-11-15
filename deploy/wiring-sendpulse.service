@@ -1,14 +1,16 @@
 [Unit]
 Description=Sync consenting WIRING contacts to SendPulse
-After=network-online.target wiring.service
+After=network-online.target wiring-places.service
 Wants=network-online.target
 
 [Service]
 Type=oneshot
-User=root
-WorkingDirectory=/root/repos/dating
-Environment=PYTHONUNBUFFERED=1
-EnvironmentFile=-/etc/wiring.env
-ExecStart=/root/bots/bin/python scripts/sync_sendpulse.py
+DynamicUser=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+EnvironmentFile=/etc/wiring-sendpulse-rust.env
+ExecStart=/opt/wiring-places/current/wiring-beta-places sync-sendpulse
 TimeoutStartSec=10min
 UMask=0077

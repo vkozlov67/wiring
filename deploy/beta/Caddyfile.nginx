@@ -1,0 +1,6 @@
+http://beta.wiring.club {
+	reverse_proxy flask:5070 {
+		header_up X-Forwarded-For {http.request.header.X-Forwarded-For}
+		header_up X-Forwarded-Proto https
+	}
+}

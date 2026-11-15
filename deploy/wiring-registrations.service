@@ -1,12 +1,17 @@
 [Unit]
 Description=Deliver consenting WIRING registration conversions
-After=network-online.target wiring.service
+After=network-online.target wiring-places.service
 Wants=network-online.target
 
 [Service]
 Type=oneshot
-WorkingDirectory=/root/repos/dating
-EnvironmentFile=-/etc/wiring.env
-ExecStart=/root/bots/bin/python scripts/sync_registrations.py
+WorkingDirectory=/
+EnvironmentFile=/etc/wiring-registration-worker.env
+ExecStart=/opt/wiring-places/current/wiring-beta-places sync-registrations
 TimeoutStartSec=5min
 UMask=0077
+DynamicUser=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes

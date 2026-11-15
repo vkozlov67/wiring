@@ -1,0 +1,8 @@
+services:
+  edge:
+    volumes:
+      - ./Caddyfile.device:/etc/caddy/Caddyfile:ro
+  places:
+    image: wiring-beta-places:public-device
+    environment:
+      WIRING_PUBLIC_PUSH_DEVICE: "1"

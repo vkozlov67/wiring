@@ -1,0 +1,9 @@
+services:
+  edge:
+    volumes:
+      - ./Caddyfile.info:/etc/caddy/Caddyfile:ro
+  places:
+    image: wiring-beta-places:public-info
+    environment:
+      WIRING_PUBLIC_SERVICE_INFO: "1"
+      MOBILE_MIN_VERSION: ""

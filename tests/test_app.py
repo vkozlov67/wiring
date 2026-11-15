@@ -30,7 +30,7 @@ os.environ["WIRING_SIGNUP_PLUS"] = "0"
 
 from PIL import Image
 
-from app import app, db, init_db, _rate  # noqa: E402
+from app import UPLOAD_DIR, app, db, init_db, _rate  # noqa: E402
 from database import open_request_connection, table_names  # noqa: E402
 from media import MediaError  # noqa: E402
 from tests.spa_paths import SPA_SHELL_PATHS  # noqa: E402
@@ -1051,6 +1051,9 @@ class WiringTest(unittest.TestCase):
 
         english = self.client.get("/m?lang=en").get_data(as_text=True)
         self.assertIn("wired differently", english)
+        self.assertIn("meet and connect without masking", english)
+        self.assertIn("Your profile, on your terms", english)
+        self.assertNotIn("The diagnosis is on the card.", english)
         self.assertIn('href="?lang=ru"', english)
 
     def test_app_landing_themes_match_site(self):
@@ -3217,6 +3220,7 @@ class WiringTest(unittest.TestCase):
         self._login(peer["email"])
         denied = self.client.patch(f"/api/messages/{first_id}", json={"body": "чужое"})
         self.assertEqual(denied.status_code, 404)
+        self.assertEqual(self.client.delete(f"/api/messages/{first_id}").status_code, 404)
 
         samples = 800
         pcm = b"\x00\x00" * samples
@@ -3235,6 +3239,12 @@ class WiringTest(unittest.TestCase):
         voice_row = next(item for item in listed if item["id"] == voice_id)
         self.assertTrue(voice_row["audio_url"])
         self.assertEqual(voice_row["audio_duration"], 2)
+        self.assertEqual(self.client.patch(f"/api/messages/{voice_id}", json={"body": "текст"}).status_code, 400)
+        with app.app_context():
+            voice_path = Path(UPLOAD_DIR) / db().execute(
+                "SELECT audio FROM messages WHERE id = ?", (voice_id,),
+            ).fetchone()["audio"]
+        self.assertTrue(voice_path.is_file())
 
         missing = self.client.post(f"/api/messages/{voice_id}/transcribe")
         self.assertEqual(missing.status_code, 503)
@@ -3248,6 +3258,7 @@ class WiringTest(unittest.TestCase):
 
         removed = self.client.delete(f"/api/messages/{voice_id}")
         self.assertEqual(removed.status_code, 200, removed.get_data(as_text=True))
+        self.assertFalse(voice_path.exists())
         after = self.client.get(f"/api/messages/{peer['id']}").get_json()["messages"]
         self.assertFalse(any(item["id"] == voice_id for item in after))
         quoted = next(item for item in after if item["reply_to"] and item["reply_to"]["id"] == first_id)

@@ -17,6 +17,7 @@ from typing import Any
 from urllib.parse import urlencode, urlparse
 
 from flask import Flask, Response, abort, g, has_request_context, jsonify, make_response, redirect, render_template, request, send_file, send_from_directory, session
+import social_backend
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -34,7 +35,7 @@ from database import (
     open_request_connection,
     table_names as _db_table_names,
 )
-from feed import claim_feed, ensure_feed_history, exclude_profile, mark_viewed, reset_delivery
+from feed import claim_feed, ensure_feed_history, exclude_profile, feed_candidates, mark_viewed, reset_delivery
 from catalog import (
     GENDER_IDS,
     INTENT_IDS,
@@ -58,8 +59,8 @@ from jev_ranker import jev_access
 from recommendations import select_recommendations
 from sendpulse_sync import ensure_sync_table
 import registration_events
-from glossary import glossary_html
-from legal_pages import ACCOUNT_DELETION_HTML, CHILD_SAFETY_HTML, LEGAL_INDEX_HTML, MARKETING_HTML, PRIVACY_HTML, RULES_HTML, SUPPORT_HTML
+from legal_pages import SUPPORT_HTML
+from public_documents import APPLE_APP_SITE_ASSOCIATION, LANDING_THEMES, PAGES as PUBLIC_DOCUMENTS
 from matchmaker import pack_profile, seed_decides_like
 from media import MediaError, chat_contact_sheet, make_thumb, read_upload
 from moderation import moderate_photo
@@ -70,7 +71,7 @@ from report_moderation import (
     is_report_banned,
 )
 from speech import MAX_AUDIO_SECONDS, SpeechError, audio_kind, transcribe_audio
-from notify import add_notice, mark_notices_read, notify_event, notify_support, send_mail, unread_notices
+from notify import add_notice, fetch_unread_notices, mark_notices_read, message_notice_body, notify_event, notify_support, send_mail
 import mobile_api
 import social_auth
 from push import delete_subscription, delete_user_subscriptions, ensure_push_tables, public_key, save_subscription
@@ -116,7 +117,6 @@ THUMB_DIR = os.environ.get("THUMB_DIR", os.path.join(os.path.dirname(UPLOAD_DIR)
 APP_SECRET_KEY = os.environ.get("APP_SECRET_KEY") or secrets.token_hex(32)
 SITE_URL = os.environ.get("SITE_URL", "https://wiring.date").rstrip("/")
 # Theme ids and labels from THEME_LIST (src/components/ui/AppHeader.tsx).
-LANDING_THEMES = {"pastel": "утро", "mist": "день", "dusk": "сумерки", "night": "ночь", "slate": "полночь"}
 GOOGLE_ANALYTICS_ID = os.environ.get("GOOGLE_ANALYTICS_ID", "G-WH72XL7E2J").strip()
 YANDEX_METRIKA_ID = os.environ.get("YANDEX_METRIKA_ID", "").strip()
 
@@ -809,7 +809,8 @@ def _consent_yes(value: Any) -> bool:
     return value is True or value in (1, "1", "true", "True", "yes", "on")
 
 
-def profile_complete(row: Row, tags: dict[str, list[str]] | None = None, photos: list | None = None) -> bool:
+def profile_complete(row: Row, tags: dict[str, list[str]] | None = None, photos: list | None = None,
+                     *, has_uploaded_photo: bool | None = None) -> bool:
     """Published identity and an image; optional traits require their own consent."""
     if int(row["is_seed"] or 0) or is_guest_email(str(row["email"] or "")):
         return True
@@ -819,13 +820,13 @@ def profile_complete(row: Row, tags: dict[str, list[str]] | None = None, photos:
     if not 2 <= len(str(row["name"] or "").strip()) <= 32:
         return False
     tags = tags if tags is not None else tags_for(row["id"])
-    if photos is None:
-        photos = photos_for(row["id"])
+    if has_uploaded_photo is None:
+        has_uploaded_photo = bool(photos_for(row["id"]) if photos is None else photos)
     if not 18 <= int(row["age"] or 0) <= 99:
         return False
     if str(row["gender"] or "") not in GENDER_IDS:
         return False
-    if not photos and not str(row["photo"] or "").strip():
+    if not has_uploaded_photo and not str(row["photo"] or "").strip():
         return False
     keys = set(row.keys())
     if (tags.get("neuro") or []) and "special_data_consent_at" in keys and not row["special_data_consent_at"]:
@@ -852,6 +853,15 @@ def tags_for(user_id: int) -> dict[str, list[str]]:
         elif row["kind"] == "vibe":
             vibe.append(row["tag"])
     neuro, vibe = normalize_user_tags(neuro, vibe)
+    return {"neuro": neuro, "vibe": vibe}
+
+
+def _discovery_tags(row: Row) -> dict[str, list[str]]:
+    if "feed_neuro" not in row.keys():
+        return tags_for(row["id"])
+    from user_tags import normalize_user_tags
+
+    neuro, vibe = normalize_user_tags(row["feed_neuro"], row["feed_vibe"])
     return {"neuro": neuro, "vibe": vibe}
 
 
@@ -982,6 +992,11 @@ def user_public(row: Row, include_email: bool = False, detail: bool = False) -> 
 
 
 def inbox_stats(uid: int) -> dict[str, int]:
+    if social_backend.CHAT_INBOX_URL:
+        try:
+            return social_backend.chat_inbox(uid)
+        except social_backend.BACKEND_ERRORS:
+            app.logger.warning("Rust inbox counters unavailable. Using Flask counters.")
     conn = db()
     blocked = blocked_ids(conn, uid)
     likes = 0
@@ -1044,7 +1059,7 @@ def current_user() -> dict[str, Any] | None:
         (uid,),
     ).fetchone()["n"]
     payload["guest_nudge"] = bool(payload.get("guest") and liked >= 3)
-    payload["notices"] = unread_notices(db(), uid)
+    payload["notices"] = fetch_unread_notices(db(), uid)
     return payload
 
 
@@ -1178,7 +1193,7 @@ def intents_for_discovery(row: Row) -> list[str]:
     items = list(intents_of(row))
     if "bodydouble" in items:
         return items
-    tags = tags_for(int(row["id"]))
+    tags = _discovery_tags(row)
     if "bodydouble" in tags.get("vibe", []):
         items.append("bodydouble")
     return items
@@ -1353,7 +1368,7 @@ def hide_tags_of(row) -> list[str]:
     return filter_hide_tags(raw if isinstance(raw, list) else str(raw or "").split(","))
 
 
-def discovery_allows(owner: Row, viewer: Row) -> bool:
+def discovery_allows(owner: Row, viewer: Row, *, viewer_vibes: list[str] | None = None) -> bool:
     """Whether `viewer` is allowed to see `owner` in the feed."""
     keys = set(owner.keys())
     viewer_age = int(viewer["age"] or 0)
@@ -1372,7 +1387,7 @@ def discovery_allows(owner: Row, viewer: Row) -> bool:
         if place != viewer_city and place != viewer_country:
             return False
     hidden_vibes = hide_tags_of(owner)
-    if hidden_vibes and set(tags_for(int(viewer["id"]))["vibe"]) & set(hidden_vibes):
+    if hidden_vibes and set(tags_for(int(viewer["id"]))["vibe"] if viewer_vibes is None else viewer_vibes) & set(hidden_vibes):
         return False
     return True
 
@@ -1686,12 +1701,20 @@ def _release_to_feed(conn: Connection, uid: int, other_id: int) -> None:
     conn.execute("DELETE FROM feed_history WHERE user_id = ? AND other_id = ?", (uid, other_id))
 
 
+def _lock_chat_pair(conn: Connection, uid: int, other_id: int) -> None:
+    conn.execute(
+        "SELECT pg_advisory_xact_lock(hashtextextended(?::text, 439817))",
+        (f"{min(uid, other_id)}:{max(uid, other_id)}",),
+    )
+
+
 def _unmatch_pair(conn: Connection, uid: int, other_id: int) -> None:
     """Hide chat: your side becomes a pass, their like is dropped.
 
     The chat history is retained and soft-deleted for audit/recovery. They leave
     Чаты and Лайки and stay out of the лента until you restore passes.
     """
+    _lock_chat_pair(conn, uid, other_id)
     now = int(time.time())
     conn.execute(
         """
@@ -1809,11 +1832,26 @@ def api_resolve_place():
 @login_required
 def api_places():
     from world_places import key, search
+
     query = str(request.args.get("q") or "").strip()[:120]
     country = str(request.args.get("country") or "").strip()[:100]
     include_countries = request.args.get("countries") == "1"
     if too_many(f"place-search:{session['uid']}", 180, 60):
         return jsonify({"ok": False, "error": tr("Подожди немного перед следующей проверкой города")}), 429
+    beta_search = app.config.get("BETA_PLACES_SEARCH") if request.method == "GET" else None
+    if beta_search is not None:
+        return beta_search(query, country, include_countries)
+    if request.method == "GET":
+        import places_backend
+
+        if places_backend.SEARCH_URL:
+            try:
+                places = places_backend.search(places_backend.SEARCH_URL, query, country, include_countries)
+            except places_backend.SEARCH_ERRORS:
+                app.logger.warning("Rust place catalog unavailable. Using Flask search.")
+            else:
+                return jsonify({"ok": True, "places": places})
+
     needle = key(query)
     normalized_query = normalize_city(query) if needle else ''
     options = []
@@ -1841,6 +1879,15 @@ def api_places():
 
 @app.get("/api/catalog")
 def api_catalog():
+    import places_backend
+
+    if request.method == "GET" and places_backend.CATALOG_URL:
+        try:
+            payload = places_backend.catalog(places_backend.CATALOG_URL)
+        except places_backend.SEARCH_ERRORS:
+            app.logger.warning("Rust public catalog unavailable. Using Flask catalog.")
+        else:
+            return jsonify({**payload, "ok": True})
     return jsonify({"ok": True, **catalog_payload()})
 
 
@@ -1850,6 +1897,14 @@ def api_me():
     return jsonify({"ok": True, "user": user})
 
 
+def _rust_profile_setting(action, uid, **fields):
+    try:
+        return social_backend.save_profile_setting(action, uid, **fields)
+    except social_backend.BACKEND_ERRORS:
+        app.logger.warning("Rust profile setting did not return a confirmed result.")
+        return None
+
+
 @app.patch("/api/me/language")
 @login_required
 @report_ban_exempt
@@ -1857,8 +1912,12 @@ def api_me_language():
     language = (request.get_json(silent=True) or {}).get("language")
     if language not in ("ru", "en"):
         return jsonify({"ok": False, "error": tr("Неизвестный язык")}), 400
-    db().execute("UPDATE users SET language = ? WHERE id = ?", (language, session["uid"]))
-    db().commit()
+    if social_backend.PROFILE_SETTINGS_URL:
+        if _rust_profile_setting("language", session["uid"], value=language) is None:
+            return jsonify({"ok": False, "error": tr("сервер временно недоступен")}), 503
+    else:
+        db().execute("UPDATE users SET language = ? WHERE id = ?", (language, session["uid"]))
+        db().commit()
     response = jsonify({"ok": True, "language": language})
     if not request.headers.get("Authorization", "").startswith("Bearer "):
         response.set_cookie("wiring-language", language, max_age=31536000, samesite="Lax", secure=request.is_secure)
@@ -1872,9 +1931,13 @@ def api_me_theme():
     theme = (request.get_json(silent=True) or {}).get("theme")
     if theme not in ("pastel", "mist", "dusk", "night", "slate"):
         return jsonify({"ok": False, "error": tr("неизвестная тема")}), 400
-    conn = db()
-    conn.execute("UPDATE users SET theme = ? WHERE id = ?", (theme, session["uid"]))
-    conn.commit()
+    if social_backend.PROFILE_SETTINGS_URL:
+        if _rust_profile_setting("theme", session["uid"], value=theme) is None:
+            return jsonify({"ok": False, "error": tr("сервер временно недоступен")}), 503
+    else:
+        conn = db()
+        conn.execute("UPDATE users SET theme = ? WHERE id = ?", (theme, session["uid"]))
+        conn.commit()
     return jsonify({"ok": True, "theme": theme})
 
 
@@ -2024,10 +2087,22 @@ def registration_attribution():
     return jsonify(ok=accepted), 200 if accepted else 400
 
 
+def _check_account_password(password_hash: str, password: str) -> bool:
+    if social_backend.PASSWORD_URL:
+        try:
+            verified = social_backend.verify_password(password_hash, password)
+        except social_backend.BACKEND_ERRORS:
+            app.logger.warning("Rust password verification unavailable. Using Flask verification.")
+        else:
+            if verified is not None:
+                return verified
+    return check_password_hash(password_hash, password)
+
+
 def _authenticate(email: str, password: str):
     """Shared by cookie login and token login. Returns (row, None) or (None, error_response)."""
     row = db().execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
-    if not row or not check_password_hash(row["password_hash"], password):
+    if not row or not _check_account_password(row["password_hash"], password):
         return None, (jsonify({"ok": False, "error": tr("неверная почта или пароль")}), 401)
     deleted_at = int(row["deleted_at"] or 0) if "deleted_at" in row.keys() and row["deleted_at"] else 0
     if deleted_at:
@@ -2482,7 +2557,9 @@ def _eligible_card(
     snoozed: set[int] | None = None,
     liked_me: set[int] | None = None,
     hide_undiagnosed: bool = True,
-) -> dict[str, Any] | None:
+    serialize: bool = True,
+    viewer_vibes: list[str] | None = None,
+) -> dict[str, Any] | Row | None:
     if row["id"] in blocked:
         return None
     if snoozed and row["id"] in snoozed:
@@ -2513,20 +2590,19 @@ def _eligible_card(
             return None
     elif not mutual_looking_ok(viewer_looking, viewer_gender, candidate_looking, candidate_gender):
         return None
-    if not discovery_allows(row, me):
+    if not discovery_allows(row, me, viewer_vibes=viewer_vibes):
         return None
-    if not int(row["is_seed"] or 0) and not profile_complete(row):
+    tags = _discovery_tags(row)
+    has_uploaded_photo = row.get("has_uploaded_photo")
+    if not profile_complete(row, tags, has_uploaded_photo=has_uploaded_photo):
         return None
-    if not photos_for(row["id"]) and not str(row["photo"] or "").strip():
+    if hide_undiagnosed and not tags["neuro"]:
         return None
-    card = user_public(row)
-    if hide_undiagnosed and not (card.get("neuro") or []):
+    if neuro_filter and not set(neuro_filter) & set(tags["neuro"]):
         return None
-    if neuro_filter and not set(neuro_filter) & set(card["neuro"]):
+    if vibe_filter and not set(vibe_filter) & set(tags["vibe"]):
         return None
-    if vibe_filter and not set(vibe_filter) & set(card["vibe"]):
-        return None
-    return card
+    return user_public(row) if serialize else row
 
 
 @app.get("/api/recommendations")
@@ -2614,23 +2690,69 @@ def api_feed():
     limit_cap = QA_FEED_LIMIT if qa_feed else 30
     limit = max(1, min(limit_cap, request.args.get("limit", type=int) or limit_cap))
 
-    def eligible(row):
-        if country_q and country_of_city(str(row["city"] or "")) != country_q:
-            return None
-        if intent_filter and not any(i in intent_filter for i in intents_for_discovery(row)):
-            return None
+    def matches_filters(row):
+        return (
+            (not country_q or country_of_city(str(row["city"] or "")) == country_q)
+            and (not intent_filter or any(i in intent_filter for i in intents_for_discovery(row)))
+        )
+
+    def filter_rows(rows):
+        use_rust = bool(social_backend.FEED_URL)
+        for start in range(0, len(rows), 32):
+            batch = rows[start : start + 32]
+            if use_rust:
+                try:
+                    selected = social_backend.feed_filter(country_q, intent_filter, [
+                        {"id": int(row["id"]),
+                         "hidden": row["id"] in blocked or row["id"] in hidden or bool(
+                             row.get("deleted_at") or row.get("paused") or row.get("report_banned_at")
+                             or row.get("is_seed") or is_guest_email(str(row["email"]))
+                         ),
+                         "country": country_of_city(str(row["city"] or "")) if country_q else "",
+                         "intents": intents_for_discovery(row) if intent_filter else []}
+                        for row in batch
+                    ])
+                except social_backend.BACKEND_ERRORS:
+                    app.logger.warning("Rust feed filter unavailable. Using Flask filters.")
+                    use_rust = False
+                else:
+                    yield from (row for row in batch if int(row["id"]) in selected)
+                    continue
+            yield from (row for row in batch if matches_filters(row))
+
+    def eligible(row, *, serialize=True, viewer_vibes=None):
         return _eligible_card(me, row, neuro_filter, vibe_filter, blocked,
                               skip_seeds=skip_seeds, snoozed=hidden, liked_me=liked_me,
-                              hide_undiagnosed=hide_undiagnosed)
+                              hide_undiagnosed=hide_undiagnosed, serialize=serialize, viewer_vibes=viewer_vibes)
 
     narrowed = qa_feed or bool(
         country_q or city_raw or gender_q or neuro_filter or vibe_filter or intent_filter or min_age != 18 or max_age != 99
     )
-    cards, has_more, generation = claim_feed(
-        db(), int(me["id"]), min_age=min_age, max_age=max_age,
-        city=city_q, gender=gender_q, limit=limit, eligible=eligible,
-        skip_ids=skip_ids, include_delivered=narrowed, match_none=unknown_city,
-    )
+    if social_backend.FEED_CLAIM_URL:
+        rows = [] if unknown_city else feed_candidates(
+            db(), int(me["id"]), min_age=min_age, max_age=max_age, city=city_q,
+            gender=gender_q, skip_ids=skip_ids, include_delivered=narrowed,
+        )
+        candidates = {}
+        viewer_vibes = tags_for(me["id"])["vibe"] if rows else []
+        for row in filter_rows(rows):
+            if eligible(row, serialize=False, viewer_vibes=viewer_vibes) is not None:
+                candidates[int(row["id"])] = row
+        try:
+            claimed, has_more, generation = social_backend.feed_claim(
+                int(me["id"]), candidates, limit, narrowed, int(time.time()),
+            )
+        except social_backend.BACKEND_ERRORS:
+            app.logger.warning("Rust feed claim did not return a confirmed result.")
+            return jsonify({"ok": False, "error": tr("сервер временно недоступен")}), 503
+        cards = [user_public(row) for row in claimed]
+    else:
+        cards, has_more, generation = claim_feed(
+            db(), int(me["id"]), min_age=min_age, max_age=max_age,
+            city=city_q, gender=gender_q, limit=limit, eligible=eligible,
+            skip_ids=skip_ids, include_delivered=narrowed, match_none=unknown_city,
+            filter_rows=filter_rows if social_backend.FEED_URL or country_q or intent_filter else None,
+        )
     liked = db().execute(
         "SELECT COUNT(*) AS n FROM swipes WHERE from_id = ? AND direction = 'like'",
         (me["id"],),
@@ -2668,6 +2790,15 @@ def api_feed_view():
         target_id = int(data.get("target_id"))
     except (ValueError, TypeError):
         return jsonify({"ok": False, "error": tr("нет цели")}), 400
+    if social_backend.FEED_UPDATE_URL:
+        try:
+            result = social_backend.feed_update("view", session["uid"], int(time.time()), target_id=target_id)
+        except social_backend.BACKEND_ERRORS:
+            app.logger.warning("Rust feed view did not return a confirmed result.")
+            return jsonify({"ok": False, "error": tr("сервер временно недоступен")}), 503
+        if result["status"] == "not_delivered":
+            return jsonify({"ok": False, "error": tr("анкета не выдавалась")}), 404
+        return jsonify({"ok": True})
     if not mark_viewed(db(), session["uid"], target_id):
         return jsonify({"ok": False, "error": tr("анкета не выдавалась")}), 404
     db().commit()
@@ -2682,12 +2813,72 @@ def api_feed_reset():
     if type(generation) is not int or generation < 0:
         return jsonify({"ok": False, "error": tr("неверная версия ленты")}), 400
     conn = db()
+    if social_backend.FEED_UPDATE_URL:
+        viewer = conn.execute("SELECT email FROM users WHERE id = ?", (session["uid"],)).fetchone()
+        try:
+            result = social_backend.feed_update(
+                "reset", session["uid"], int(time.time()), generation=min(generation, 2**63 - 1),
+                qa=bool(viewer and has_qa_feed(str(viewer["email"]))),
+            )
+        except social_backend.BACKEND_ERRORS:
+            app.logger.warning("Rust feed reset did not return a confirmed result.")
+            return jsonify({"ok": False, "error": tr("сервер временно недоступен")}), 503
+        if result["status"] == "premium_required":
+            return jsonify({"ok": False, "error": tr("доступно только с WIRING+")}), 403
+        return jsonify({"ok": True, "reset": result["reset"], "generation": result["generation"]})
     viewer = conn.execute("SELECT * FROM users WHERE id = ? FOR UPDATE", (session["uid"],)).fetchone()
     if not is_premium(viewer) and not has_qa_feed(str(viewer["email"])):
         return jsonify({"ok": False, "error": tr("доступно только с WIRING+")}), 403
     reset, generation = reset_delivery(conn, viewer, generation)
     conn.commit()
     return jsonify({"ok": True, "reset": reset, "generation": generation})
+
+
+def _send_swipe_notice(conn, uid, target_id, me, target, matched, was_match):
+    if not _notifiable(target) or (matched and was_match):
+        return
+    notify_event(
+        conn, user_id=target_id, email=str(target["email"]), is_guest=False,
+        kind="match" if matched else "like", from_id=uid, from_name=str(me["name"]),
+        last_seen=int(target.get("last_seen") or 0),
+    )
+    conn.commit()
+
+
+def _rust_swipe(conn, uid, target_id, direction, me, target):
+    seed_direction = None
+    if direction == "like" and target["is_seed"] and not conn.execute(
+        "SELECT 1 FROM swipes WHERE from_id = ? AND to_id = ?", (target_id, uid),
+    ).fetchone():
+        seed = pack_profile(target, tags_for(target_id), prompts_for(target_id))
+        candidate = pack_profile(me, tags_for(uid), prompts_for(uid))
+        seed_direction = "like" if seed_decides_like(seed, candidate) else "pass"
+    try:
+        result = social_backend.feed_swipe(uid, target_id, direction, seed_direction, int(time.time()))
+    except social_backend.BACKEND_ERRORS:
+        app.logger.warning("Rust swipe did not return a confirmed result.")
+        return jsonify({"ok": False, "error": tr("сервер временно недоступен")}), 503
+    status = result["status"]
+    if status == "blocked":
+        return jsonify({"ok": False, "error": tr("этот человек скрыт")}), 403
+    if status == "not_found":
+        return jsonify({"ok": False, "error": tr("человек не найден")}), 404
+    if status == "premium_required":
+        return jsonify({"ok": False, "error": tr("отложить — это WIRING+"), "need_plus": True}), 403
+    if status == "already_matched":
+        return jsonify({"ok": False, "error": tr("это уже взаимный лайк — убрать можно только из чата"),
+                        "matched": True, "match": user_public(target)}), 409
+    if status == "snoozed":
+        return jsonify({"ok": True, "matched": False, "match": None, "snoozed_until": result["until"]})
+    matched = result["matched"]
+    if direction == "like":
+        try:
+            _send_swipe_notice(conn, uid, target_id, me, target, matched, result["was_match"])
+        except Exception:
+            conn.rollback()
+            app.logger.warning("Notification transport failed after the swipe was stored.")
+    return jsonify({"ok": True, "matched": matched, "match": user_public(target) if matched else None,
+                    "guest_nudge": bool(is_guest_email(str(me["email"])) and result["liked"] >= 3)})
 
 
 @app.post("/api/swipe")
@@ -2711,6 +2902,8 @@ def api_swipe():
     if not target or ("deleted_at" in target.keys() and target["deleted_at"]):
         return jsonify({"ok": False, "error": tr("человек не найден")}), 404
     me_row = conn.execute("SELECT * FROM users WHERE id = ?", (uid,)).fetchone()
+    if social_backend.FEED_SWIPE_URL:
+        return _rust_swipe(conn, uid, target_id, direction, me_row, target)
     if direction == "snooze":
         if not is_premium(me_row):
             return jsonify({"ok": False, "error": tr("отложить — это WIRING+"), "need_plus": True}), 403
@@ -2953,6 +3146,21 @@ def api_likes():
 def api_matches():
     uid = session["uid"]
     conn = db()
+    if social_backend.CHAT_MATCHES_URL:
+        try:
+            summaries = social_backend.chat_matches(uid, tr("голосовое"), tr("фото"))
+        except social_backend.BACKEND_ERRORS:
+            app.logger.warning("Rust chat summaries unavailable. Using Flask summaries.")
+        else:
+            profiles = {int(row["id"]): row for row in conn.execute(
+                "SELECT * FROM users WHERE id = ANY(?::bigint[]) AND COALESCE(deleted_at, 0) = 0",
+                ([item["id"] for item in summaries],),
+            )}
+            blocked = blocked_ids(conn, uid)
+            return jsonify({"ok": True, "matches": [
+                {**user_public(profiles[item["id"]]), **item}
+                for item in summaries if item["id"] in profiles and item["id"] not in blocked
+            ]})
     blocked = blocked_ids(conn, uid)
     rows = conn.execute(
         """
@@ -3107,6 +3315,46 @@ def _message_columns() -> str:
     return "id, from_id, to_id, body, created_at, reply_to_id, photo, extra_photos, audio, audio_duration, transcript, edited_at, deleted_at"
 
 
+def _render_thread(rows, uid, peer_read_id, by_id):
+    if social_backend.CHAT_URL and rows:
+        try:
+            messages = [
+                {
+                    "id": row["id"], "from_id": row["from_id"], "body": str(row["body"] or ""),
+                    "photo": str(row["photo"] or ""), "photo_count": len(_message_photos(row)),
+                    "audio": bool(row["audio"]), "audio_duration": int(row["audio_duration"] or 0),
+                    "edited": bool(row["edited_at"]), "created_at": row["created_at"],
+                    "reply_to_id": row["reply_to_id"],
+                }
+                for row in rows
+            ]
+            replies = {}
+            for reply_id in {row["reply_to_id"] for row in rows} & by_id.keys():
+                source = by_id[reply_id]
+                gone = bool(source["deleted_at"])
+                photo = not gone and bool(source["photo"])
+                audio = not gone and bool(source["audio"])
+                text = "" if gone else str(source["body"] or "").strip() or str(source["transcript"] or "").strip()
+                if gone:
+                    placeholder = tr("сообщение удалено")
+                elif str(source["audio"] or "").strip():
+                    placeholder = tr("голосовое")
+                    text = ""
+                else:
+                    placeholder = tr("фото") if str(source["photo"] or "").strip() else ""
+                replies[reply_id] = {
+                    "from_id": source["from_id"], "gone": gone, "photo": photo, "audio": audio,
+                    "text": text, "placeholder": placeholder,
+                }
+            return social_backend.chat_thread({
+                "uid": uid, "peer_read_id": peer_read_id, "base_path": BASE_PATH,
+                "messages": messages, "replies": replies,
+            })
+        except social_backend.BACKEND_ERRORS:
+            app.logger.warning("Rust chat rendering unavailable. Using Flask rendering.")
+    return [_message_payload(row, uid, peer_read_id, by_id) for row in rows]
+
+
 def _attach_reply_sources(conn: Connection, rows: list[Row], by_id: dict[int, Row]) -> None:
     missing = []
     for row in rows:
@@ -3134,21 +3382,7 @@ def _thread_message(conn: Connection, uid: int, message_id: int) -> Row | None:
     return row
 
 
-@app.get("/api/messages/<int:other_id>")
-@login_required
-def api_messages(other_id: int):
-    uid = session["uid"]
-    conn = db()
-    if other_id in blocked_ids(conn, uid):
-        return jsonify({"ok": False, "error": tr("этот человек скрыт")}), 403
-    if not _is_match(conn, uid, other_id):
-        return jsonify({"ok": False, "error": tr("написать можно после взаимного лайка")}), 403
-    other = conn.execute("SELECT * FROM users WHERE id = ?", (other_id,)).fetchone()
-    if not other or ("deleted_at" in other.keys() and other["deleted_at"]):
-        return jsonify({"ok": False, "error": tr("человек не найден")}), 404
-    after_id = max(0, request.args.get("after", type=int) or 0)
-    before_id = max(0, request.args.get("before", type=int) or 0)
-    limit = max(0, min(200, request.args.get("limit", type=int) or 0))
+def _flask_chat_history(conn, uid, other_id, after_id, before_id, limit):
     rows = conn.execute(
         """
         SELECT id, from_id, to_id, body, created_at, reply_to_id, photo, extra_photos, audio, audio_duration, transcript, edited_at, deleted_at FROM messages
@@ -3178,8 +3412,44 @@ def api_messages(other_id: int):
     by_id = {int(r["id"]): r for r in rows}
     _attach_reply_sources(conn, rows, by_id)
     reactions = reactions_for(conn, [int(r["id"]) for r in rows], uid)
-    messages = [{**_message_payload(r, uid, peer_read_id, by_id),
-                 "reactions": reactions.get(int(r["id"]), [])} for r in rows]
+    messages = _render_thread(rows, uid, peer_read_id, by_id)
+    for message in messages:
+        message["reactions"] = reactions.get(int(message["id"]), [])
+    return messages, has_more
+
+
+@app.get("/api/messages/<int:other_id>")
+@login_required
+def api_messages(other_id: int):
+    uid = session["uid"]
+    conn = db()
+    if other_id in blocked_ids(conn, uid):
+        return jsonify({"ok": False, "error": tr("этот человек скрыт")}), 403
+    if not _is_match(conn, uid, other_id):
+        return jsonify({"ok": False, "error": tr("написать можно после взаимного лайка")}), 403
+    other = conn.execute("SELECT * FROM users WHERE id = ?", (other_id,)).fetchone()
+    if not other or ("deleted_at" in other.keys() and other["deleted_at"]):
+        return jsonify({"ok": False, "error": tr("человек не найден")}), 404
+    after_id = max(0, request.args.get("after", type=int) or 0)
+    before_id = max(0, request.args.get("before", type=int) or 0)
+    limit = max(0, min(200, request.args.get("limit", type=int) or 0))
+    if social_backend.CHAT_HISTORY_URL:
+        try:
+            history = social_backend.chat_history({
+                "uid": uid, "other_id": other_id, "after_id": after_id, "before_id": before_id,
+                "limit": limit, "base_path": BASE_PATH, "deleted_label": tr("сообщение удалено"),
+                "voice_label": tr("голосовое"), "photo_label": tr("фото"),
+            })
+        except social_backend.BACKEND_ERRORS:
+            app.logger.warning("Rust chat history did not return a confirmed result.")
+            return jsonify({"ok": False, "error": tr("сервер временно недоступен")}), 503
+        if history["status"] == "blocked":
+            return jsonify({"ok": False, "error": tr("этот человек скрыт")}), 403
+        if history["status"] == "no_match":
+            return jsonify({"ok": False, "error": tr("написать можно после взаимного лайка")}), 403
+        messages, has_more = history["messages"], history["has_more"]
+    else:
+        messages, has_more = _flask_chat_history(conn, uid, other_id, after_id, before_id, limit)
     peer = user_public(other, detail=True)
     me_row = conn.execute("SELECT * FROM users WHERE id = ?", (uid,)).fetchone()
     me = user_public(me_row, detail=True) if me_row else None
@@ -3242,6 +3512,44 @@ def api_send_message():
     # A client-generated id makes retries after a dropped response safe: the same
     # (sender, client_id) never creates a second message.
     client_id = str(data.get("client_id") or "").strip()[:64] or None
+    if social_backend.CHAT_SEND_URL:
+        notifiable = bool(sender and _notifiable(other))
+        with use_language(other.get("language", "ru")):
+            notice_body = message_notice_body(str(sender["name"]), body)[:280] if notifiable else None
+        try:
+            outcome = social_backend.chat_send({
+                "uid": uid, "other_id": other_id, "body": body, "reply_to_id": reply_to_id,
+                "client_id": client_id, "created_at": int(time.time()), "notice_body": notice_body,
+            })
+        except social_backend.BACKEND_ERRORS:
+            # The write may have committed before the connection broke.
+            app.logger.warning("Rust chat write did not return a confirmed result.")
+            return jsonify({"ok": False, "error": tr("сервер временно недоступен")}), 503
+        status = outcome["status"]
+        if status == "blocked":
+            return jsonify({"ok": False, "error": tr("этот человек скрыт")}), 403
+        if status == "no_match":
+            return jsonify({"ok": False, "error": tr("написать можно после взаимного лайка")}), 403
+        if status == "reply_missing":
+            return jsonify({"ok": False, "error": tr("сообщение для ответа не найдено")}), 400
+        if status == "duplicate":
+            return jsonify({"ok": True, "duplicate": True, "id": outcome["id"]})
+        if notifiable:
+            try:
+                notify_event(
+                    conn, user_id=other_id, email=str(other["email"]), is_guest=False,
+                    kind="message", from_id=uid, from_name=str(sender["name"]), preview=body,
+                    last_seen=int(other["last_seen"] or 0), stored_message_notice=outcome["updated_notice"],
+                )
+                conn.commit()
+            except Exception:
+                app.logger.warning("Notification transport failed after the message was stored.")
+        return jsonify({"ok": True, "id": outcome["id"]})
+    _lock_chat_pair(conn, uid, other_id)
+    if other_id in blocked_ids(conn, uid):
+        return jsonify({"ok": False, "error": tr("этот человек скрыт")}), 403
+    if not _is_match(conn, uid, other_id):
+        return jsonify({"ok": False, "error": tr("написать можно после взаимного лайка")}), 403
     if client_id:
         dup = conn.execute(
             "SELECT id FROM messages WHERE from_id = ? AND client_id = ?", (uid, client_id)
@@ -3276,6 +3584,48 @@ def api_send_message():
     return jsonify({"ok": True, "id": message_id})
 
 
+def _send_rust_chat_media(conn, sender, other, *, body, media, paths, reply_to_id, preview):
+    uid, other_id = session["uid"], int(other["id"])
+    notifiable = bool(sender and _notifiable(other))
+    with use_language(other.get("language", "ru")):
+        if media["kind"] == "voice":
+            preview = tr("голосовое")
+        elif not body.strip():
+            preview = tr("фото")
+        notice_body = message_notice_body(str(sender["name"]), preview)[:280] if notifiable else None
+    try:
+        outcome = social_backend.chat_send({
+            "uid": uid, "other_id": other_id, "body": body, "reply_to_id": reply_to_id,
+            "client_id": None, "created_at": int(time.time()), "notice_body": notice_body, "media": media,
+        }, url=social_backend.CHAT_MEDIA_URL)
+    except social_backend.BACKEND_ERRORS:
+        # Keep files if the database may already reference them.
+        app.logger.warning("Rust chat media did not return a confirmed result.")
+        return jsonify({"ok": False, "error": tr("сервер временно недоступен")}), 503
+    status = outcome["status"]
+    if status != "sent":
+        for path in paths:
+            _unlink_upload(path)
+        if status == "blocked":
+            return jsonify({"ok": False, "error": tr("этот человек скрыт")}), 403
+        if status == "no_match":
+            return jsonify({"ok": False, "error": tr("написать можно после взаимного лайка")}), 403
+        if status == "reply_missing":
+            return jsonify({"ok": False, "error": tr("сообщение для ответа не найдено")}), 400
+        return jsonify({"ok": True, "id": outcome["id"]})
+    if notifiable:
+        try:
+            notify_event(
+                conn, user_id=other_id, email=str(other["email"]), is_guest=False,
+                kind="message", from_id=uid, from_name=str(sender["name"]), preview=preview,
+                last_seen=int(other["last_seen"] or 0), stored_message_notice=outcome["updated_notice"],
+            )
+            conn.commit()
+        except Exception:
+            app.logger.warning("Notification transport failed after the message was stored.")
+    return jsonify({"ok": True, "id": outcome["id"]})
+
+
 @app.post("/api/messages/photo")
 @login_required
 @real_account_required
@@ -3292,6 +3642,8 @@ def api_send_photo_message():
         return jsonify({"ok": False, "error": tr("нет адресата")}), 400
     caption = str(request.form.get("body") or "").strip()[:500]
     conn = db()
+    if not social_backend.CHAT_MEDIA_URL:
+        _lock_chat_pair(conn, uid, other_id)
     if other_id in blocked_ids(conn, uid):
         return jsonify({"ok": False, "error": tr("этот человек скрыт")}), 403
     if not _is_match(conn, uid, other_id):
@@ -3339,13 +3691,19 @@ def api_send_photo_message():
             with open(os.path.join(UPLOAD_DIR, rel), "wb") as handle:
                 handle.write(jpeg)
         rel = paths[0]
-        msg_id = _insert_message(conn, uid=uid, other_id=other_id, body=caption, photo=rel, reply_to_id=reply_to_id)
-        conn.execute("UPDATE messages SET extra_photos = ? WHERE id = ?", (json.dumps(paths[1:]), msg_id))
+        if not social_backend.CHAT_MEDIA_URL:
+            msg_id = _insert_message(conn, uid=uid, other_id=other_id, body=caption, photo=rel, reply_to_id=reply_to_id)
+            conn.execute("UPDATE messages SET extra_photos = ? WHERE id = ?", (json.dumps(paths[1:]), msg_id))
     except Exception:
         conn.rollback()
         for path in paths:
             _unlink_upload(path)
         raise
+    if social_backend.CHAT_MEDIA_URL:
+        return _send_rust_chat_media(
+            conn, sender, other, body=caption, media={"kind": "photo", "paths": paths}, paths=paths,
+            reply_to_id=reply_to_id, preview=_message_preview(caption, rel),
+        )
     mark_read(conn, uid, other_id)
     if sender and other and _notifiable(other):
         notify_event(
@@ -3469,12 +3827,35 @@ def _reply_target(conn: Connection, uid: int, other_id: int, raw_reply: object) 
     return reply_to_id
 
 
+def _rust_message_mutation(action, message_id, unavailable, **fields):
+    try:
+        result = social_backend.chat_mutate(action, session["uid"], message_id, int(time.time()), **fields)
+    except social_backend.BACKEND_ERRORS:
+        app.logger.warning("Rust chat mutation did not return a confirmed result.")
+        return jsonify({"ok": False, "error": tr("сервер временно недоступен")}), 503
+    status = result["status"]
+    if status == "unavailable":
+        return jsonify({"ok": False, "error": unavailable}), 404
+    if status == "voice":
+        return jsonify({"ok": False, "error": tr("голосовое нельзя переписать текстом")}), 400
+    if status == "reacted":
+        return jsonify({"ok": True, "reactions": result["reactions"]})
+    if status == "transcribed":
+        return jsonify({"ok": True, "transcript": result["transcript"]})
+    if status == "deleted":
+        for upload in result["uploads"]:
+            _unlink_upload(upload)
+    return jsonify({"ok": True})
+
+
 @app.put("/api/messages/<int:message_id>/reaction")
 @login_required
 def api_message_reaction(message_id: int):
     data = request.get_json(silent=True)
     if not isinstance(data, dict) or "emoji" not in data or (data["emoji"] is not None and data["emoji"] not in REACTIONS):
         return jsonify({"ok": False, "error": tr("Недопустимая реакция")}), 400
+    if social_backend.CHAT_MUTATE_URL:
+        return _rust_message_mutation("react", message_id, tr("Сообщение недоступно"), emoji=data["emoji"])
     conn = db()
     # Serialize reactions on the message, including retries from multiple devices.
     conn.execute("SELECT id FROM messages WHERE id = ? FOR UPDATE", (message_id,)).fetchone()
@@ -3493,6 +3874,8 @@ def api_edit_message(message_id: int):
     body = str(data.get("body") or "").strip()
     if not (1 <= len(body) <= 1000):
         return jsonify({"ok": False, "error": tr("сообщение: 1–1000 символов")}), 400
+    if social_backend.CHAT_MUTATE_URL:
+        return _rust_message_mutation("edit", message_id, tr("это сообщение нельзя изменить"), body=body)
     conn = db()
     row = _thread_message(conn, uid, message_id)
     if not row or int(row["from_id"]) != uid:
@@ -3511,6 +3894,8 @@ def api_edit_message(message_id: int):
 @login_required
 def api_delete_message(message_id: int):
     uid = session["uid"]
+    if social_backend.CHAT_MUTATE_URL:
+        return _rust_message_mutation("delete", message_id, tr("это сообщение нельзя удалить"))
     conn = db()
     row = _thread_message(conn, uid, message_id)
     if not row or int(row["from_id"]) != uid:
@@ -3559,6 +3944,8 @@ def api_transcribe_message(message_id: int):
         text = transcribe_audio(data, os.path.basename(rel), mime)
     except SpeechError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 503
+    if social_backend.CHAT_TRANSCRIBE_URL:
+        return _rust_message_mutation("transcribe", message_id, tr("голосовое не найдено"), transcript=text)
     conn.execute("UPDATE messages SET transcript = ? WHERE id = ?", (text, message_id))
     conn.commit()
     return jsonify({"ok": True, "transcript": text})
@@ -3579,6 +3966,8 @@ def api_send_voice_message():
     if not other_id:
         return jsonify({"ok": False, "error": tr("нет адресата")}), 400
     conn = db()
+    if not social_backend.CHAT_MEDIA_URL:
+        _lock_chat_pair(conn, uid, other_id)
     if other_id in blocked_ids(conn, uid):
         return jsonify({"ok": False, "error": tr("этот человек скрыт")}), 403
     if not _is_match(conn, uid, other_id):
@@ -3610,6 +3999,11 @@ def api_send_voice_message():
     rel = f"chat/{uid}/{filename}"
     with open(os.path.join(folder, filename), "wb") as handle:
         handle.write(data)
+    if social_backend.CHAT_MEDIA_URL:
+        return _send_rust_chat_media(
+            conn, sender, other, body="", media={"kind": "voice", "path": rel, "duration": duration},
+            paths=[rel], reply_to_id=reply_to_id, preview=tr("голосовое"),
+        )
     msg_id = _insert_message(
         conn,
         uid=uid,
@@ -3636,6 +4030,14 @@ def api_send_voice_message():
     return jsonify({"ok": True, "id": msg_id})
 
 
+def _rust_chat_pair(action, uid, other_id, **fields):
+    try:
+        return social_backend.chat_pair(action, uid, other_id, int(time.time()), **fields)
+    except social_backend.BACKEND_ERRORS:
+        app.logger.warning("Rust chat pair update did not return a confirmed result.")
+        return None
+
+
 @app.post("/api/unmatch")
 @login_required
 def api_unmatch():
@@ -3645,6 +4047,13 @@ def api_unmatch():
         other_id = int(data.get("user_id"))
     except (TypeError, ValueError):
         return jsonify({"ok": False, "error": tr("нет человека")}), 400
+    if social_backend.CHAT_PAIR_URL:
+        result = _rust_chat_pair("unmatch", uid, other_id)
+        if result is None:
+            return jsonify({"ok": False, "error": tr("сервер временно недоступен")}), 503
+        if result["status"] == "no_match":
+            return jsonify({"ok": False, "error": tr("размэтч возможен только после взаимного лайка")}), 400
+        return jsonify({"ok": True})
     conn = db()
     if not _is_match(conn, uid, other_id):
         return jsonify({"ok": False, "error": tr("размэтч возможен только после взаимного лайка")}), 400
@@ -3664,9 +4073,17 @@ def api_block():
         return jsonify({"ok": False, "error": tr("нет человека")}), 400
     if other_id == uid:
         return jsonify({"ok": False, "error": tr("это ты")}), 400
+    if social_backend.CHAT_PAIR_URL:
+        result = _rust_chat_pair("block", uid, other_id)
+        if result is None:
+            return jsonify({"ok": False, "error": tr("сервер временно недоступен")}), 503
+        if result["status"] == "not_found":
+            return jsonify({"ok": False, "error": tr("человек не найден")}), 404
+        return jsonify({"ok": True})
     conn = db()
     if not conn.execute("SELECT id FROM users WHERE id = ?", (other_id,)).fetchone():
         return jsonify({"ok": False, "error": tr("человек не найден")}), 404
+    _lock_chat_pair(conn, uid, other_id)
     conn.execute(
         "INSERT INTO blocks (from_id, to_id, created_at) VALUES (?, ?, ?) ON CONFLICT(from_id, to_id) DO NOTHING",
         (uid, other_id, int(time.time())),
@@ -3736,6 +4153,12 @@ def api_archive_revise():
         removed = conn.execute("DELETE FROM blocks WHERE from_id = ? AND to_id = ?", (uid, other_id))
         if not removed.rowcount:
             return jsonify({"ok": False, "error": tr("блока нет")}), 404
+    elif social_backend.CHAT_PAIR_URL:
+        result = _rust_chat_pair("unmatch", uid, other_id)
+        if result is None:
+            return jsonify({"ok": False, "error": tr("сервер временно недоступен")}), 503
+        if result["status"] == "no_match":
+            return jsonify({"ok": False, "error": tr("взаимного лайка нет")}), 400
     else:
         if not _is_match(conn, uid, other_id):
             return jsonify({"ok": False, "error": tr("взаимного лайка нет")}), 400
@@ -3772,20 +4195,30 @@ def api_report():
         return jsonify({"ok": False, "error": tr("человек не найден")}), 404
     if too_many(f"report:{uid}", 5, 3600):
         return jsonify({"ok": False, "error": tr("Слишком много жалоб — подожди немного")}), 429
-    report_insert = conn.execute(
-        "INSERT INTO reports (from_id, to_id, reason, details, created_at) VALUES (?, ?, ?, ?, ?)",
-        (uid, other_id, reason, details, int(time.time())),
-    )
-    conn.execute(
-        "INSERT INTO blocks (from_id, to_id, created_at) VALUES (?, ?, ?) ON CONFLICT(from_id, to_id) DO NOTHING",
-        (uid, other_id, int(time.time())),
-    )
-    _unmatch_pair(conn, uid, other_id)
-    newly_banned = apply_report_ban_if_needed(conn, other_id)
-    conn.commit()
+    if social_backend.CHAT_PAIR_URL:
+        result = _rust_chat_pair("report", uid, other_id, reason=reason, details=details)
+        if result is None:
+            return jsonify({"ok": False, "error": tr("сервер временно недоступен")}), 503
+        if result["status"] == "not_found":
+            return jsonify({"ok": False, "error": tr("человек не найден")}), 404
+        report_id, newly_banned = result["id"], result["newly_banned"]
+    else:
+        _lock_chat_pair(conn, uid, other_id)
+        report_insert = conn.execute(
+            "INSERT INTO reports (from_id, to_id, reason, details, created_at) VALUES (?, ?, ?, ?, ?)",
+            (uid, other_id, reason, details, int(time.time())),
+        )
+        conn.execute(
+            "INSERT INTO blocks (from_id, to_id, created_at) VALUES (?, ?, ?) ON CONFLICT(from_id, to_id) DO NOTHING",
+            (uid, other_id, int(time.time())),
+        )
+        _unmatch_pair(conn, uid, other_id)
+        report_id = report_insert.lastrowid
+        newly_banned = apply_report_ban_if_needed(conn, other_id)
+        conn.commit()
     _notify_report_support(
-        tr("WIRING · новая жалоба #{0}" ,report_insert.lastrowid),
-        tr("Новая жалоба #{0}: участник #{1} на участника #{2}. Причина: {3}.\nРазобрать: {4}/admin#reports" ,report_insert.lastrowid, uid, other_id, reason, SITE_URL),
+        tr("WIRING · новая жалоба #{0}" ,report_id),
+        tr("Новая жалоба #{0}: участник #{1} на участника #{2}. Причина: {3}.\nРазобрать: {4}/admin#reports" ,report_id, uid, other_id, reason, SITE_URL),
     )
     if newly_banned:
         _notify_report_support(
@@ -4065,6 +4498,18 @@ def api_plus():
 def api_patch_me_consents():
     data = request.get_json(silent=True) or {}
     uid = session["uid"]
+    if social_backend.PROFILE_SETTINGS_URL:
+        now = int(time.time())
+        updated = _rust_profile_setting(
+            "consents", uid, special_at=now if _consent_yes(data.get("special_data_consent")) else None,
+            update_photo="photo_rights_consent" in data,
+            photo_at=now if _consent_yes(data.get("photo_rights_consent")) else None,
+        )
+        if updated is None:
+            return jsonify({"ok": False, "error": tr("сервер временно недоступен")}), 503
+        if not updated:
+            return jsonify({"ok": False, "error": tr("нет профиля")}), 401
+        return jsonify({"ok": True, "user": current_user()})
     conn = db()
     me = conn.execute("SELECT * FROM users WHERE id = ?", (uid,)).fetchone()
     if not me:
@@ -4110,7 +4555,7 @@ def api_onboard_skip():
 @login_required
 def api_inbox():
     uid = session["uid"]
-    return jsonify({"ok": True, **inbox_stats(uid), "notices": unread_notices(db(), uid)})
+    return jsonify({"ok": True, **inbox_stats(uid), "notices": fetch_unread_notices(db(), uid)})
 
 
 @app.post("/api/notices/read")
@@ -4126,6 +4571,13 @@ def api_notices_read():
                 ids.append(int(item))
             except (TypeError, ValueError):
                 continue
+    if social_backend.NOTICES_URL:
+        try:
+            social_backend.notices("mark_read", session["uid"], ids=ids or [])
+        except social_backend.BACKEND_ERRORS:
+            app.logger.warning("Rust notification acknowledgement did not return a confirmed result.")
+            return jsonify({"ok": False, "error": tr("сервер временно недоступен")}), 503
+        return jsonify({"ok": True})
     conn = db()
     mark_notices_read(conn, session["uid"], ids)
     conn.commit()
@@ -4396,88 +4848,22 @@ def admin_task_decision(task_id: int):
     return redirect("/admin#tasks")
 
 
-@app.get("/account-deletion")
-def account_deletion():
-    return render_template(
-        "legal.html",
-        title=tr("Удаление аккаунта и данных"),
-        description=tr("Как удалить аккаунт WIRING и что происходит с анкетой и данными."),
-        path="/account-deletion",
-        site_url=SITE_URL,
-        body=ACCOUNT_DELETION_HTML,
-    )
+def _public_document_context(path):
+    title, description, body = PUBLIC_DOCUMENTS[path]
+    return {"title": tr(title), "description": tr(description), "body": body,
+            "path": path, "site_url": SITE_URL}
 
 
-@app.get("/child-safety")
-def child_safety():
-    return render_template(
-        "legal.html",
-        title=tr("Стандарты защиты детей в WIRING"),
-        description=tr("WIRING — только для взрослых. Запрет CSAE и CSAM, жалобы и контакт по вопросам защиты детей."),
-        path="/child-safety",
-        site_url=SITE_URL,
-        body=CHILD_SAFETY_HTML,
-    )
-
-
-@app.get("/privacy")
-def privacy():
-    return render_template(
-        "legal.html",
-        title=tr("Политика конфиденциальности"),
-        description=tr("Какие персональные данные обрабатывает WIRING и какие у вас есть права."),
-        path="/privacy",
-        site_url=SITE_URL,
-        body=PRIVACY_HTML,
-    )
-
-
-@app.get("/legal")
-def legal_index():
-    return render_template(
-        "legal.html",
-        title=tr("Документы и безопасность"),
-        description=tr("Соглашение, конфиденциальность, рассылка, защита детей и удаление аккаунта WIRING."),
-        path="/legal",
-        site_url=SITE_URL,
-        body=LEGAL_INDEX_HTML,
-    )
-
-
-@app.get("/rules")
-def rules():
-    return render_template(
-        "legal.html",
-        title=tr("Пользовательское соглашение"),
-        description=tr("Условия использования WIRING. 18+. Ограничения по законодательству РФ."),
-        path="/rules",
-        site_url=SITE_URL,
-        body=RULES_HTML,
-    )
-
-
-@app.get("/marketing")
-def marketing_consent():
-    return render_template(
-        "legal.html",
-        title=tr("Согласие на рассылку"),
-        description=tr("Отдельное согласие на рекламные сообщения WIRING. Для знакомств не обязательно."),
-        path="/marketing",
-        site_url=SITE_URL,
-        body=MARKETING_HTML,
-    )
-
-
-@app.get("/glossary")
-def glossary():
-    return render_template(
-        "legal.html",
-        title=tr("Буквы и слова с анкет"),
-        description=tr("Простым языком: что значат ASD, СДВГ, ПРЛ и остальные слова на WIRING."),
-        path="/glossary",
-        site_url=SITE_URL,
-        body=glossary_html(),
-    )
+@app.get("/account-deletion", endpoint="account_deletion")
+@app.get("/child-safety", endpoint="child_safety")
+@app.get("/privacy", endpoint="privacy")
+@app.get("/legal", endpoint="legal_index")
+@app.get("/rules", endpoint="rules")
+@app.get("/marketing", endpoint="marketing_consent")
+@app.get("/glossary", endpoint="glossary")
+def public_document():
+    path = request.path.removeprefix(BASE_PATH)
+    return render_template("legal.html", **_public_document_context(path))
 
 
 @app.get("/m")
@@ -4562,10 +4948,7 @@ def support():
 
 @app.get("/.well-known/apple-app-site-association")
 def apple_app_site_association():
-    return jsonify({"applinks": {"details": [{"appIDs": ["G3T7684N3M.date.wiring.app"],
-        "components": [{"/": "/api/*", "exclude": True}, {"/": "/admin*", "exclude": True},
-                       {"/": "/public/*", "exclude": True}, {"/": "/uploads/*", "exclude": True},
-                       {"/": "/.well-known/*", "exclude": True}, {"/": "/*"}]}]}})
+    return jsonify(APPLE_APP_SITE_ASSOCIATION)
 
 
 @app.get("/.well-known/assetlinks.json")

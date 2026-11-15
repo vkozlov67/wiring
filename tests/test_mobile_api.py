@@ -357,6 +357,46 @@ class MobileApiTest(unittest.TestCase):
         self.web.post("/api/messages", json={"to_id": b["id"], "body": "без id"})
         self.assertEqual(len(self.web.get(f"/api/messages/{b['id']}").get_json()["messages"]), 4)
 
+    def test_concurrent_message_retries_store_one_message_and_notice(self):
+        self.client = self.web
+        sender = self._register(email="sender@wiring.test", name="Аня")
+        self._logout()
+        recipient = self._register(email="recipient@wiring.test", name="Боря")
+        self.web.post("/api/swipe", json={"target_id": sender["id"], "direction": "like"})
+        self._logout()
+        base.WiringTest._login.__get__(self)("sender@wiring.test")
+        self.assertTrue(self.web.post(
+            "/api/swipe", json={"target_id": recipient["id"], "direction": "like"}
+        ).get_json()["matched"])
+        barrier = threading.Barrier(2)
+        payload = {"to_id": recipient["id"], "body": "одна отправка", "client_id": "concurrent"}
+
+        def send():
+            client = app.test_client()
+            with client.session_transaction() as session:
+                session["uid"] = sender["id"]
+            barrier.wait(timeout=5)
+            return client.post("/api/messages", json=payload)
+
+        with ThreadPoolExecutor(max_workers=2) as workers:
+            responses = list(workers.map(lambda _: send(), range(2)))
+        self.assertEqual([r.status_code for r in responses], [200, 200])
+        results = [r.get_json() for r in responses]
+        self.assertEqual(sum(bool(row.get("duplicate")) for row in results), 1)
+        self.assertEqual(results[0]["id"], results[1]["id"])
+        conn = open_request_connection()
+        try:
+            self.assertEqual(conn.execute(
+                "SELECT COUNT(*) AS n FROM messages WHERE from_id = ? AND client_id = ?",
+                (sender["id"], payload["client_id"]),
+            ).fetchone()["n"], 1)
+            self.assertEqual(conn.execute(
+                "SELECT COUNT(*) AS n FROM notifications WHERE user_id = ? AND from_id = ? AND kind = 'message'",
+                (recipient["id"], sender["id"]),
+            ).fetchone()["n"], 1)
+        finally:
+            conn.close()
+
     def test_notification_switches_do_not_flip_each_other(self):
         self._user()
         tokens = self._token_login()

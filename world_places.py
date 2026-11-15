@@ -51,8 +51,9 @@ def resolve(value: str) -> str | None:
     if qualified_country(value): return value
     needle = key(value)
     if len(needle) < 2: return None
+    exact_alias = b'|' + needle.encode('utf-8') + b'|'
     for canonical, name, country, aliases, population in rows():
-        if has_alias(aliases, needle): return canonical
+        if exact_alias in aliases: return canonical
     return None
 
 @lru_cache(maxsize=512)

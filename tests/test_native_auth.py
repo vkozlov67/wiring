@@ -2,12 +2,14 @@
 import base64
 import hashlib
 import os
+import re
 import time
 import unittest
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
 import tests.test_app as base
+from social_auth import NATIVE_CODE_TTL
 from tests.test_app import app
 from database import open_request_connection
 
@@ -93,7 +95,7 @@ class NativeAuthTest(unittest.TestCase):
     def test_expired_code_and_arbitrary_callback_are_rejected(self):
         code = self.code()
         conn = open_request_connection()
-        conn.execute('UPDATE oauth_native_codes SET created_at = ?', (int(time.time()) - 61,))
+        conn.execute('UPDATE oauth_native_codes SET created_at = ?', (int(time.time()) - NATIVE_CODE_TTL - 1,))
         conn.commit()
         conn.close()
         self.assertEqual(self.exchange(code).status_code, 400)
@@ -118,6 +120,65 @@ class NativeAuthTest(unittest.TestCase):
         query = parse_qs(urlparse(result.location).query)
         self.assertEqual(query['state'], [self.state])
         self.assertIn('error', query)
+
+    def _android_callback(self, user_agent, **query):
+        start = self.start()
+        url = urlparse(start.get_json()['url'])
+        opened = self.browser.get(url.path + '?' + url.query)
+        state = parse_qs(urlparse(opened.location).query)['state'][0]
+        return self.browser.get('/api/auth/google/callback', query_string=dict(state=state, **query),
+                                 headers={'User-Agent': user_agent})
+
+    def _continue(self, callback):
+        body = callback.get_data(as_text=True)
+        self.assertEqual(callback.status_code, 200, body)
+        self.assertNotIn('intent://', body)
+        self.assertNotIn('wiring://', body)
+        self.assertNotIn('<script', body)
+        self.assertNotIn('http-equiv="refresh"', body)
+        fields = dict(re.findall(r'name="([^"]+)" value="([^"]*)"', body))
+        opened = self.browser.post('/api/auth/native/open', data=fields)
+        page = opened.get_data(as_text=True)
+        self.assertEqual(opened.status_code, 200, page)
+        self.assertNotIn('intent://', page)
+        self.assertNotIn('wiring://', page)
+        self.assertNotIn('access_token', page)
+        self.assertNotIn('refresh_token', page)
+        launch = dict(re.findall(r'name="([^"]+)" value="([^"]*)"', page))
+        self.assertEqual(launch.get('launch'), '1')
+        handed = self.browser.post('/api/auth/native/open', data=launch)
+        self.assertEqual(handed.status_code, 302, handed.get_data(as_text=True))
+        location = handed.headers['Location']
+        self.assertIn('#Intent;scheme=wiring;package=date.wiring.app;', location)
+        intent = urlparse(location)
+        self.assertEqual((intent.scheme, intent.netloc, intent.path), ('intent', 'oauth', '/'))
+        return parse_qs(intent.query)
+
+    def test_android_chrome_return_is_a_tap_not_a_scheme_redirect(self):
+        agents = (
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Mobile Safari/537.36',
+        )
+        for user_agent in agents:
+            with patch('social_auth.exchange_identity', return_value=('subject', 'native@gmail.com', 'Ада', True)):
+                callback = self._android_callback(user_agent, code='provider-code')
+            data = self._continue(callback)
+            self.assertEqual(data['state'], [self.state])
+            self.assertEqual(self.exchange(data['code'][0]).status_code, 200)
+
+        cancelled = self._android_callback(agents[0], error='access_denied')
+        cancel_query = self._continue(cancelled)
+        self.assertEqual(cancel_query['state'], [self.state])
+        self.assertIn('error', cancel_query)
+        self.assertNotIn('code', cancel_query)
+        self.assertEqual(self.browser.post('/api/auth/native/open', data={'state': 'nope'}).status_code, 400)
+
+        with patch('social_auth.exchange_identity', return_value=('subject', 'ios-native@gmail.com', 'Ада', True)):
+            ios = self._android_callback(
+                'Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0.1 Mobile/15E148 Safari/604.1',
+                code='provider-code')
+        self.assertEqual(ios.status_code, 302)
+        self.assertTrue(ios.location.startswith('wiring://oauth?'))
 
     def test_email_verification_issues_native_tokens_once(self):
         # Registration's normal verification proof, no production mail/account access.

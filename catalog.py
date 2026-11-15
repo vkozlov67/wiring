@@ -21,6 +21,9 @@ NEURO: list[dict[str, str]] = [
     {"id": "dyslexia", "label": "дислексия / дисграфия", "hint": "собрать буквы — целый квест"},
     {"id": "dyspraxia", "label": "диспраксия", "hint": "тело иногда лагает"},
     {"id": "tourette", "label": "синдром Туретта", "hint": "непроизвольные тики"},
+    {"id": "narcolepsy", "label": "нарколепсия", "hint": "нарушение регуляции сна и бодрствования"},
+    {"id": "alexithymia", "label": "алекситимия", "hint": "сложно распознавать и описывать свои эмоции"},
+    {"id": "alexisomia", "label": "алексисомия", "hint": "сложно распознавать и описывать телесные ощущения"},
 ]
 
 # Still valid on old profiles; hidden from new pickers via catalog order only.

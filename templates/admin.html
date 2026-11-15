@@ -1,5 +1,5 @@
 {% macro reply_panel(kind, id, recipient) %}
-  {% for reply in reply_history[kind].get(id, []) %}
+  {% for reply in reply_history[kind][id|string] | default(reply_history[kind][id] | default([])) %}
     <blockquote><p>{{ reply.body }}</p><small>
       {% if reply.user_id %}{{ _("Доступен в поддержке аккаунта #") }}{{ reply.user_id }}. {% endif %}
       {% if reply.email_sent_at %}{{ _("Письмо принято почтовым сервисом: ") }}{{ reply.email }}.
@@ -47,6 +47,7 @@
     {% if error %}<p class="err">{{ error }}</p>{% endif %}
     {% if not authed %}
       <form class="form" method="post" action="/admin">
+        {% if login_csrf %}<input type="hidden" name="csrf" value="{{ login_csrf }}">{% endif %}
         <label>{{ _("токен") }}<input name="token" type="password" required autocomplete="current-password"></label>
         <button class="solid" type="submit">{{ _("войти") }}</button>
       </form>
@@ -66,7 +67,7 @@
           <a href="#premium" data-tab="premium">WIRING+</a>
           <a href="#moderation" data-tab="moderation">{{ _("Модерация ") }}<span data-count title="{{ _('Анкеты с автобаном') }}">{{ s.report_banned }}</span></a>
           <a href="#support" data-tab="support">{{ _("Поддержка ") }}<span data-count title="{{ _('Обращения в списке') }}">{{ tickets|length }}</span></a>
-          <a href="#tasks" data-tab="tasks">{{ _("Задачи ") }}<span data-count title="{{ _('Кандидаты на разбор') }}">{{ task_counts.get('candidate', 0) }}</span></a>
+          <a href="#tasks" data-tab="tasks">{{ _("Задачи ") }}<span data-count title="{{ _('Кандидаты на разбор') }}">{{ task_counts['candidate'] | default(0) }}</span></a>
           <a href="#marketing" data-tab="marketing">{{ _("Рассылка") }}</a>
         </nav>
       </div>
@@ -381,7 +382,7 @@
             <button class="ghost" type="submit">{{ _("собрать из поддержки") }}</button>
           </form>
         </div>
-        <p class="task-threshold">{{ _("Порог: ") }}<strong>{{ "%.1f"|format(task_threshold) }}/10</strong>{{ _(" · кандидатов ") }}{{ task_counts.get('candidate', 0) }}{{ _(" · одобрено ") }}{{ task_counts.get('approved', 0) }}{{ _(" · отфильтровано ") }}{{ task_counts.get('filtered', 0) }}{{ _(" · дубликатов ") }}{{ task_counts.get('duplicate', 0) }}</p>
+        <p class="task-threshold">{{ _("Порог: ") }}<strong>{{ "%.1f"|format(task_threshold) }}/10</strong>{{ _(" · кандидатов ") }}{{ task_counts['candidate'] | default(0) }}{{ _(" · одобрено ") }}{{ task_counts['approved'] | default(0) }}{{ _(" · отфильтровано ") }}{{ task_counts['filtered'] | default(0) }}{{ _(" · дубликатов ") }}{{ task_counts['duplicate'] | default(0) }}</p>
         <div class="task-board">
           {% for t in tasks %}
           <article class="task-card task-{{ t.status }}">

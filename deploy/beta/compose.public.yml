@@ -1,0 +1,10 @@
+services:
+  edge:
+    volumes:
+      - ./Caddyfile.public:/etc/caddy/Caddyfile:ro
+  places:
+    environment:
+      WIRING_PUBLIC_BIND: 0.0.0.0:5082
+      SITE_URL: ${BETA_ORIGIN:-https://beta.wiring.club}
+      GOOGLE_ANALYTICS_ID: ""
+      YANDEX_METRIKA_ID: ""

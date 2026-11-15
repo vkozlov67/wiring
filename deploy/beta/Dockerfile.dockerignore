@@ -1,0 +1,17 @@
+**
+!/*.py
+!/package*.json
+!/requirements.txt
+!/tsconfig.json
+!/vite*.ts
+!/src/**
+!/scripts/**
+!/public/**
+/public/dist/**
+!/templates/**
+!/locales/**
+!/resources/**
+!/deploy/beta/**
+**/.env
+**/.env.*
+**/__pycache__/**

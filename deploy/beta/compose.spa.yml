@@ -1,0 +1,8 @@
+services:
+  edge:
+    volumes:
+      - ./Caddyfile.spa:/etc/caddy/Caddyfile:ro
+  places:
+    image: wiring-beta-places:public-spa
+    environment:
+      WIRING_PUBLIC_SPA: "1"

@@ -1,0 +1,6 @@
+services:
+  edge:
+    ports: !override
+      - "127.0.0.1:5080:80"
+    volumes:
+      - ./Caddyfile.nginx:/etc/caddy/Caddyfile:ro

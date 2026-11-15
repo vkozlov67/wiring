@@ -1,7 +1,7 @@
 """Server-side OAuth code flow; provider tokens never enter browser storage."""
 from __future__ import annotations
 
-from i18n import tr
+from i18n import get_language, tr
 
 import base64
 import hashlib
@@ -10,6 +10,7 @@ import os
 import re
 import secrets
 import time
+from html import escape
 from urllib.error import URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -28,6 +29,7 @@ PROVIDERS = {
               '', 'email'),
 }
 TTL = 600
+NATIVE_CODE_TTL = 180
 
 
 class OAuthError(Exception):
@@ -127,17 +129,104 @@ def exchange_identity(provider, code, redirect_uri, verifier):
     return subject, email, name if len(name) >= 2 else "", authoritative
 
 
+def _chrome_hangs_on_scheme(user_agent):
+    """Chrome 157 on Android reports a desktop UA on the Google return. A 302 to
+    wiring:// hangs, and a tap on wiring:// or intent:// in that tab is ignored.
+    A same-site submit whose response redirects to intent:// still reaches the
+    installed app. iOS keeps the direct 302."""
+    return 'Android' in user_agent or 'X11; Linux' in user_agent
+
+
+def _browser_page(main_html):
+    return f'''<!doctype html>
+<html lang="{escape(get_language())}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>WIRING</title>
+<style>
+  body {{ margin:0; min-height:100vh; display:grid; place-items:center; background:#e9ebf3; color:#1c1b22;
+         font:18px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }}
+  main {{ width:min(100% - 32px, 420px); }}
+  h1 {{ font-size:22px; font-weight:650; margin:0 0 12px; }}
+  p {{ margin:0 0 20px; }}
+  button, a.go {{ display:block; width:100%; box-sizing:border-box; text-align:center; background:#6d5efc;
+         color:#fff; text-decoration:none; padding:14px 18px; border-radius:999px; border:0; font:inherit; }}
+  a.alt {{ display:block; text-align:center; color:#3a3558; margin-top:16px; }}
+</style>
+</head>
+<body>
+<main>
+{main_html}
+</main>
+</body>
+</html>'''
+
+
+def native_finish(params, open_path):
+    target = 'wiring://oauth?' + urlencode(params)
+    if not _chrome_hangs_on_scheme(request.headers.get('User-Agent', '')):
+        return redirect(target)
+    # The Google return page cannot open the app. A same-site form submit
+    # reaches the next page, whose own submit is answered with the intent redirect.
+    fields = ''.join(
+        f'<input type="hidden" name="{escape(key)}" value="{escape(str(value))}">'
+        for key, value in params.items())
+    headline = str(params.get('error') or tr('Вход подтверждён'))
+    body = _browser_page(f'''
+  <h1>{escape(headline)}</h1>
+  <p>{escape(tr('Нажми кнопку. Откроется следующая страница, уже без Google.'))}</p>
+  <form method="post" action="{escape(open_path)}" autocomplete="off">
+    {fields}
+    <button type="submit">{escape(tr('Продолжить'))}</button>
+  </form>''')
+    return current_app.response_class(body, mimetype='text/html')
+
+
+def _expired_page():
+    response = current_app.response_class(
+        _browser_page(f'<h1>{escape(tr("Вход устарел. Начни заново."))}</h1>'),
+        status=400, mimetype='text/html')
+    return response
+
+
+def _intent_url(params):
+    # The slash before '?' survives Chrome's intent parser. The app receives
+    # wiring://oauth/?query, which its existing wiring://oauth check accepts.
+    return ('intent://oauth/?' + urlencode(params)
+            + '#Intent;scheme=wiring;package=date.wiring.app;action=android.intent.action.VIEW;end')
+
+
+def native_launch_page(params, open_path):
+    # A link whose href is intent:// or wiring:// is dropped in this tab. The
+    # button is an ordinary same-site submit; the response redirect is what
+    # Chrome will hand to the installed app.
+    fields = ''.join(
+        f'<input type="hidden" name="{escape(key)}" value="{escape(str(value))}">'
+        for key, value in params.items())
+    body = _browser_page(f'''
+  <h1>{escape(tr('Открыть приложение'))}</h1>
+  <p>{escape(tr('Нажми кнопку один раз. WIRING заберёт вход.'))}</p>
+  <form method="post" action="{escape(open_path)}" autocomplete="off">
+    {fields}
+    <input type="hidden" name="launch" value="1">
+    <button type="submit">{escape(tr('Открыть приложение'))}</button>
+  </form>''')
+    return current_app.response_class(body, mimetype='text/html')
+
+
 def install(app, *, db, prefix, site_url, create_user, too_many, grace):
     def failure(message, mode='login', native_state=None):
         if native_state:
-            return redirect('wiring://oauth?' + urlencode(dict(error=message, state=native_state)))
+            return native_finish(dict(error=message, state=native_state), prefix('/api/auth/native/open'))
         session['oauth_error'] = message
         return redirect(prefix('/register' if mode == 'register' else '/login'))
 
     @app.after_request
     def protect_oauth_response(response):
         endpoint = (request.endpoint or '').removesuffix('__prefixed')
-        if endpoint in {'auth_providers', 'auth_start', 'auth_callback', 'auth_native_browser', 'auth_native_exchange'}:
+        if endpoint in {'auth_providers', 'auth_start', 'auth_callback', 'auth_native_browser', 'auth_native_exchange', 'auth_native_open'}:
             response.headers['Cache-Control'] = 'no-store'
             response.headers['Referrer-Policy'] = 'no-referrer'
         return response
@@ -220,6 +309,33 @@ def install(app, *, db, prefix, site_url, create_user, too_many, grace):
             params['prompt'] = 'select_account'
         return redirect(auth_url + '?' + urlencode(params))
 
+    @app.post('/api/auth/native/open')
+    def auth_native_open():
+        # First submit leaves Google's return page. The next submit is answered
+        # with the intent redirect; a direct intent link in this tab never fires.
+        open_path = prefix('/api/auth/native/open')
+        code = str(request.form.get('code') or '')
+        state = str(request.form.get('state') or '')
+        error = re.sub(r'[\x00-\x1f\x7f]', '', str(request.form.get('error') or ''))[:300]
+        launch = request.form.get('launch') == '1'
+        if not re.fullmatch(r'[A-Za-z0-9_-]{16,100}', state):
+            return _expired_page()
+        if code:
+            if not re.fullmatch(r'[A-Za-z0-9_-]{20,128}', code):
+                return _expired_page()
+            row = db().execute('SELECT created_at FROM oauth_native_codes WHERE code_hash = ?',
+                               (hashlib.sha256(code.encode()).hexdigest(),)).fetchone()
+            if not row or int(time.time()) - row['created_at'] > NATIVE_CODE_TTL:
+                return _expired_page()
+            params = dict(code=code, state=state)
+        elif error:
+            params = dict(error=error, state=state)
+        else:
+            return _expired_page()
+        if launch:
+            return redirect(_intent_url(params), code=302)
+        return native_launch_page(params, open_path)
+
     @app.post('/api/auth/native/exchange')
     def auth_native_exchange():
         data = request.get_json(silent=True) or {}
@@ -231,7 +347,7 @@ def install(app, *, db, prefix, site_url, create_user, too_many, grace):
         conn = db()
         found = conn.execute('SELECT * FROM oauth_native_codes WHERE code_hash = ? FOR UPDATE', (hashlib.sha256(code.encode()).hexdigest(),)).fetchone()
         challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b'=').decode()
-        if not found or int(time.time()) - found['created_at'] > 60 or not secrets.compare_digest(challenge, found['challenge']):
+        if not found or int(time.time()) - found['created_at'] > NATIVE_CODE_TTL or not secrets.compare_digest(challenge, found['challenge']):
             conn.rollback()
             return jsonify(ok=False, error=tr("Вход устарел. Начни заново.")), 400
         conn.execute('DELETE FROM oauth_native_codes WHERE code_hash = ?', (found['code_hash'],))
@@ -306,11 +422,11 @@ def install(app, *, db, prefix, site_url, create_user, too_many, grace):
             return failure(str(exc) if isinstance(exc, OAuthError) else tr("Этот аккаунт уже связан с другим входом. Используй прежний способ входа."), mode, flow['native_state'])
         if flow['native_challenge']:
             code = secrets.token_urlsafe(32)
-            conn.execute('DELETE FROM oauth_native_codes WHERE created_at < ?', (int(time.time()) - 60,))
+            conn.execute('DELETE FROM oauth_native_codes WHERE created_at < ?', (int(time.time()) - NATIVE_CODE_TTL,))
             conn.execute('INSERT INTO oauth_native_codes (code_hash, user_id, challenge, created_at) VALUES (?, ?, ?, ?)',
                          (hashlib.sha256(code.encode()).hexdigest(), row['id'], flow['native_challenge'], int(time.time())))
             conn.commit()
-            return redirect('wiring://oauth?' + urlencode(dict(code=code, state=flow['native_state'])))
+            return native_finish(dict(code=code, state=flow['native_state']), prefix('/api/auth/native/open'))
         session.clear()
         session.permanent = True
         session['uid'] = row['id']

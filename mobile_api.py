@@ -28,6 +28,7 @@ from flask import Flask, g, jsonify, request, session
 from itsdangerous import BadData, URLSafeTimedSerializer
 
 from database import Connection
+import social_backend
 
 ACCESS_TTL = 60 * 60
 REFRESH_TTL = 60 * 60 * 24 * 90
@@ -156,20 +157,36 @@ def install(
         g.bearer_auth = True
         return None
 
-    def _login_payload(conn: Connection, row: Any, family: str, device: str) -> dict[str, Any]:
+    def _login_payload(conn: Connection, row: Any, family: str, device: str, *, new_session=False):
+        uid, password_hash = int(row["id"]), str(row["password_hash"])
+        if new_session and social_backend.MOBILE_ISSUE_URL:
+            refresh = secrets.token_urlsafe(48)
+            now = int(time.time())
+            try:
+                issued = social_backend.issue_mobile_refresh(
+                    uid, _hash_token(refresh), family, _pw_fingerprint(password_hash), device[:80], now, now + REFRESH_TTL,
+                )
+            except social_backend.BACKEND_ERRORS:
+                app.logger.warning("Rust mobile issuance did not return a confirmed result.")
+                return None, _error(tr("сервер временно недоступен"), 503)
+            if not issued:
+                return None, _error(tr("аккаунт недоступен"), 401)
+        else:
+            refresh = issue_refresh(conn, uid, password_hash, family, device)
         return {
             "ok": True,
-            "access_token": issue_access(int(row["id"]), str(row["password_hash"])),
-            "refresh_token": issue_refresh(conn, int(row["id"]), str(row["password_hash"]), family, device),
+            "access_token": issue_access(uid, password_hash),
+            "refresh_token": refresh,
             "expires_in": ACCESS_TTL,
-        }
+        }, None
 
     def issue_native_session(user_id: int, device: str = ""):
         conn = db()
         row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
         if not row or row["deleted_at"]:
             return _error(tr("аккаунт недоступен"), 401)
-        payload = _login_payload(conn, row, secrets.token_hex(12), device)
+        # Native OAuth and email verification consume a one-time code in this transaction.
+        payload, _ = _login_payload(conn, row, secrets.token_hex(12), device)
         conn.commit()
         session.clear()
         session["uid"] = int(row["id"])
@@ -193,7 +210,9 @@ def install(
         if err is not None:
             return err
         conn = db()
-        payload = _login_payload(conn, row, secrets.token_hex(12), str(data.get("device") or ""))
+        payload, error = _login_payload(conn, row, secrets.token_hex(12), str(data.get("device") or ""), new_session=True)
+        if error:
+            return error
         conn.commit()
         session.permanent = False
         session["uid"] = int(row["id"])
@@ -207,6 +226,21 @@ def install(
     def api_auth_refresh():
         data = request.get_json(silent=True) or {}
         token = str(data.get("refresh_token") or "")
+        if social_backend.MOBILE_REFRESH_URL:
+            now = int(time.time())
+            new_token = secrets.token_urlsafe(48)
+            try:
+                rotated = social_backend.rotate_mobile_refresh(
+                    _hash_token(token), _hash_token(new_token), now, now + REFRESH_TTL,
+                )
+            except social_backend.BACKEND_ERRORS:
+                app.logger.warning("Rust mobile refresh did not return a confirmed result.")
+                return _error(tr("сервер временно недоступен"), 503)
+            if rotated is None:
+                return _error(tr("сессия недействительна"), 401, token_expired=True)
+            uid, fingerprint = rotated
+            return jsonify({"ok": True, "access_token": serializer.dumps({"uid": uid, "pw": fingerprint}),
+                            "refresh_token": new_token, "expires_in": ACCESS_TTL})
         conn = db()
         found = conn.execute(
             "SELECT * FROM mobile_refresh_tokens WHERE token_hash = ?", (_hash_token(token),)
@@ -247,16 +281,24 @@ def install(
             )
             conn.commit()
             return _error(tr("сессия недействительна"), 401, token_expired=True)
-        payload = _login_payload(conn, user, str(found["family"]), str(found["device"] or ""))
+        payload, _ = _login_payload(conn, user, str(found["family"]), str(found["device"] or ""))
         conn.commit()
         return jsonify(payload)
 
     @app.post("/api/auth/logout")
     def api_auth_logout():
         data = request.get_json(silent=True) or {}
-        conn = db()
         now = int(time.time())
         token = str(data.get("refresh_token") or "")
+        if social_backend.MOBILE_LOGOUT_URL:
+            if token:
+                try:
+                    social_backend.logout_mobile(_hash_token(token), str(data.get("push_token") or ""), now)
+                except social_backend.BACKEND_ERRORS:
+                    app.logger.warning("Rust mobile logout did not return a confirmed result.")
+                    return _error(tr("сервер временно недоступен"), 503)
+            return jsonify({"ok": True})
+        conn = db()
         if token:
             found = conn.execute(
                 "SELECT family, user_id FROM mobile_refresh_tokens WHERE token_hash = ?", (_hash_token(token),)

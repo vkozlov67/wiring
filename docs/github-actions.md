@@ -4,8 +4,10 @@ Workflow: [`.github/workflows/ci.yml`](../.github/workflows/ci.yml)
 
 | Trigger | Jobs |
 |---------|------|
-| Pull request | `test` — `./scripts/test.sh` (Vite build, router tests, Python unittest) |
-| Push to `main` | `test`, then `deploy` — same tests, then `./deploy.sh` to the VPS |
+| Pull request | `test` — frontend and Python checks, Rust tests, and a production artifact build |
+| Push to `main` | `test`, then `deploy` — publish the Rust and frontend artifact produced by the same run |
+
+`deploy.sh` checks both domains and confirms that Flask is inactive and disabled, with no nginx upstream or listener on port 5070, before and after activating the release.
 
 ## One-time: deploy secret
 
@@ -26,4 +28,4 @@ Optional **variables** (defaults shown in the workflow):
 
 The `production` environment on `deploy` allows adding required reviewers later (Settings → Environments).
 
-Manual deploy without CI: run **Actions → CI → Run workflow** on `main`, or locally `./deploy.sh`.
+Manual deploy without CI: run **Actions → CI → Run workflow** on `main`, or locally run `./scripts/test.sh` and then `./deploy.sh`. See the [release procedure](rust-migration.md#публикация-и-откат).

@@ -5,8 +5,12 @@ After=network.target
 [Service]
 Type=oneshot
 User=root
-WorkingDirectory=/root/repos/dating
+WorkingDirectory=/opt/wiring-places/current
 Environment=UPLOAD_DIR=/var/lib/wiring/uploads
-Environment=PYTHONUNBUFFERED=1
-EnvironmentFile=-/etc/wiring.env
-ExecStart=/root/bots/bin/python -c "import app; app.run_account_purge()"
+EnvironmentFile=/etc/wiring-purge-rust.env
+ExecStart=/opt/wiring-places/current/wiring-beta-places purge-accounts --apply
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/wiring/uploads

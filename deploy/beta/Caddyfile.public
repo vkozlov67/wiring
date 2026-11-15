@@ -1,0 +1,14 @@
+http://beta.wiring.club {
+	@public_documents path /account-deletion /child-safety /privacy /legal /rules /marketing /glossary /robots.txt /sitemap.xml /.well-known/apple-app-site-association /.well-known/assetlinks.json
+	handle @public_documents {
+		reverse_proxy places:5082 {
+			header_up X-Forwarded-Proto https
+		}
+	}
+	handle {
+		reverse_proxy flask:5070 {
+			header_up X-Forwarded-For {http.request.header.X-Forwarded-For}
+			header_up X-Forwarded-Proto https
+		}
+	}
+}

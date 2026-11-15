@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import Any
 
 from database import Connection, Row, ensure_column
@@ -36,6 +36,7 @@ def claim_feed(
     gender: str = "",
     skip_ids: set[int] | None = None, include_delivered: bool = False,
     match_none: bool = False,
+    filter_rows: Callable[[list[Row]], Iterable[Row]] | None = None,
 ) -> tuple[list[dict[str, Any]], bool, int]:
     """Reserve a random page atomically; the caller must commit before sending it.
 
@@ -77,7 +78,7 @@ def claim_feed(
 
     def take(rows: list[Row], *, replay: bool) -> None:
         nonlocal has_more
-        for row in rows:
+        for row in filter_rows(rows) if filter_rows is not None else rows:
             if int(row["id"]) in selected_ids:
                 continue
             card = eligible(row)
@@ -102,6 +103,25 @@ def claim_feed(
     if include_delivered and not has_more and len(cards) <= limit:
         take(fetch(replay_sql), replay=True)
     return cards, has_more, int(viewer["feed_generation"])
+
+
+def feed_candidates(conn: Connection, user_id: int, *, min_age: int, max_age: int, city: str,
+                    gender: str, skip_ids: set[int], include_delivered: bool) -> list[Row]:
+    """Fetch profiles for the shared visibility policy before Rust claims a page."""
+    return conn.execute("""
+        SELECT u.*, EXISTS (SELECT 1 FROM photos p WHERE p.user_id = u.id) AS has_uploaded_photo,
+               ARRAY(SELECT t.tag FROM user_tags t WHERE t.user_id = u.id AND t.kind = 'neuro' ORDER BY t.tag) AS feed_neuro,
+               ARRAY(SELECT t.tag FROM user_tags t WHERE t.user_id = u.id AND t.kind = 'vibe' ORDER BY t.tag) AS feed_vibe
+        FROM users u
+        WHERE u.id != ? AND COALESCE(u.deleted_at, 0) = 0
+          AND u.age BETWEEN ? AND ? AND (? = '' OR u.city = ?)
+          AND (? = '' OR u.gender = ?) AND NOT (u.id = ANY(?::bigint[]))
+          AND NOT EXISTS (SELECT 1 FROM swipes s WHERE s.from_id = ? AND s.to_id = u.id)
+          AND NOT EXISTS (SELECT 1 FROM feed_history h WHERE h.user_id = ? AND h.other_id = u.id
+                          AND (h.excluded_at IS NOT NULL OR NOT ?))
+          AND (EXISTS (SELECT 1 FROM photos p WHERE p.user_id = u.id) OR COALESCE(u.photo, '') != '')
+    """, (user_id, min_age, max_age, city, city, gender, gender,
+          [value for value in skip_ids if value < 2**63], user_id, user_id, include_delivered)).fetchall()
 
 
 def reset_delivery(conn: Connection, viewer: Row, expected_generation: int) -> tuple[bool, int]:

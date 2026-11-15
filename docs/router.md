@@ -1,6 +1,6 @@
 # SPA routing
 
-The browser shell (`src/app/bootstrap.js`, built as `public/dist/app.js`) and Flask share the same URL scheme. Route logic is implemented in **`src/router/`** and shipped as **`public/dist/router.js`**.
+The browser shell (`src/app/bootstrap.js`, built as `public/dist/app.js`) shares its URL scheme with the production Rust server and the local Flask reference. Route logic is implemented in **`src/router/`** and shipped as **`public/dist/router.js`**.
 
 ## Source layout
 
@@ -46,9 +46,11 @@ Admin tabs use document fragments: `/admin#overview`, `#people`, `#analytics`, `
 3. Navigation: `goToView()` + `syncUrl()` at end of `render()`.
 4. Auth screens call `syncUrl()` after Preact mount.
 
-When adding a route: update **`routes.ts`**, **`app.py`** SPA GET, and **`router.test.mjs`**.
+When adding a route: update **`routes.ts`**, **`spa_http.rs`**, applicable proxy routes, the development **`app.py`** SPA GET, and **`router.test.mjs`**.
 
 Server legal/admin templates load `public/dist/server-header.js` to mount the shared `AppHeader`; document bodies remain server-rendered and URLs are unchanged. Auth headers mount with the Preact auth feature.
+
+On production, nginx serves `/sw.js` and ordinary `/public/` assets from the published build. The localized manifest remains a Rust endpoint and thumbnail requests still use the existing handler.
 
 The `/feed` URL is unchanged. The vertical Preact feed uses `GET /api/feed?limit=2` and `POST /api/feed/view`; scrolling does not call `/api/swipe`. Like/pass are explicit actions, with a shared Modal confirmation for permanent pass. SPA navigation retains loaded cards and position; document reload requests unseen delivery history, as documented in `architecture.md`.
 
@@ -70,9 +72,13 @@ OAuth использует серверные `POST /api/auth/{google|yandex}/st
 
 The existing server-header entrypoint also mounts admin reply forms into `/admin` server-template hosts. Support reply history remains on the existing `/support` SPA screen; `/api/support/replies` is its authenticated shared API and is exempt from the report-ban gate. No SPA paths or URL contract change.
 
+The Rust support handler preserves the existing `POST /support` URL for JSON, URL-encoded and multipart forms. `GET /support` still uses the Preact shell for web navigation. Routes served by Rust and their rollback instructions are tracked in [rust-migration.md](rust-migration.md).
+
+The Rust admin page renders the same server template, with the same fragments and form actions. The login form submits a token to `/admin`; administrative replies use the same Rust backend.
+
 Мобильная навигация Expo Router находится в отдельном [wiring-mobile](https://github.com/volodymyrk8/wiring-mobile/blob/main/docs/router.md). Выделение репозитория не меняет веб-URL или общий `/api/*`.
 
-Native redirect остаётся `wiring://oauth` и обменивает одноразовый результат через `/api/auth/native/exchange`. Universal/App Links ассоциации обслуживает Flask по `/.well-known/apple-app-site-association` и `/.well-known/assetlinks.json`; это публичные JSON документы, не SPA_PATHS. API callback исключён из перехвата Universal Links. Перевод canonical профиля/чата/referral/email ссылок выполняется `src/routes.ts` мобильного клиента. Веб-URL и маршруты Preact не менялись.
+Native redirect остаётся `wiring://oauth` и обменивает одноразовый результат через `/api/auth/native/exchange`. Universal/App Links ассоциации обслуживает Rust по `/.well-known/apple-app-site-association` и `/.well-known/assetlinks.json`; это публичные JSON документы, не SPA_PATHS. API callback исключён из перехвата Universal Links. Перевод canonical профиля/чата/referral/email ссылок выполняется `src/routes.ts` мобильного клиента. Веб-URL и маршруты Preact не менялись.
 
 `/me` по умолчанию показывает собственную анкету через Preact person bundle. Только «Редактировать анкету» открывает `/me/edit`; вкладка и пункт меню «Профиль» возвращают `/me`. Первичная настройка после регистрации может сразу открыть `/me/edit`. Browser regression `npm run test:profile:browser` проверяет исходный режим, явный переход, reload редактора, возврат вкладкой и отсутствие PATCH при открытии. Режим `PUBLISHED_ASSETS=1` проверяет опубликованный клиент с теми же ожиданиями. `PUBLISHED_BASELINE=1` воспроизводит прежний баг редактора. Оба режима читают публичные JS-ассеты, но все API подменены синтетическим аккаунтом, без production-входа или записей.
 

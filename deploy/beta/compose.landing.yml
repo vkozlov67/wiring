@@ -1,0 +1,8 @@
+services:
+  edge:
+    volumes:
+      - ./Caddyfile.landing:/etc/caddy/Caddyfile:ro
+  places:
+    image: wiring-beta-places:public-landing
+    environment:
+      WIRING_PUBLIC_LANDING: "1"
