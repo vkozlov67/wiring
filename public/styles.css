@@ -2540,6 +2540,22 @@ html:is([data-view="deck"], [data-view="recommendations"]) #deck-feature-root {
   html:is([data-view="profile"], [data-view="edit-profile"])[data-tabs] #app {
     --tabbar-clearance: 108px;
   }
+  html[data-view="person"][data-tabs] #app {
+    height: 100dvh;
+    padding-bottom: 0;
+  }
+  html[data-view="person"][data-tabs] #person-feature-root {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    scroll-padding-block: 8px;
+  }
+  html[data-view="person"][data-tabs] .tabbar {
+    position: static;
+    flex: none;
+    margin: 8px auto max(10px, env(safe-area-inset-bottom));
+    transform: none;
+  }
   html:is([data-view="deck"], [data-view="recommendations"])[data-tabs] #app {
     --tabbar-clearance: 112px;
     padding-bottom: calc(var(--tabbar-clearance) + env(safe-area-inset-bottom) + 4px);

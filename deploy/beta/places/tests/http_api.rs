@@ -213,6 +213,32 @@ async fn message_idempotency_reactions_and_soft_deletion() {
 }
 
 #[tokio::test]
+async fn replying_to_an_incoming_like_creates_a_match() {
+    let api = Api::new();
+    let db = database().await;
+    let sender = user_id(&db, "vera").await;
+    let recipient = user_id(&db, "gleb").await;
+    let sender_cookie = api.web("vera").await;
+    let recipient_cookie = api.web("gleb").await;
+    let swipe = |target_id| api.post("/api/swipe", json!({"target_id":target_id,"direction":"like"}));
+    let notice_read = || async {
+        db.query_one(
+            "SELECT \"read\" FROM notifications WHERE user_id=$1::bigint AND from_id=$2::bigint AND kind='like'",
+            &[&recipient, &sender],
+        ).await.unwrap().get::<_, i32>(0)
+    };
+
+    let first = json_response(swipe(recipient).header(header::COOKIE, &sender_cookie), 200).await;
+    assert_eq!(first["matched"], false);
+    assert_eq!(notice_read().await, 0);
+
+    let reply = json_response(swipe(sender).header(header::COOKIE, &recipient_cookie), 200).await;
+    assert_eq!(reply["matched"], true);
+    assert_eq!(reply["match"]["id"], sender);
+    assert_eq!(notice_read().await, 1);
+}
+
+#[tokio::test]
 async fn feed_recovers_prefetched_cards_until_viewed() {
     let api = Api::new();
     let cookie = api.web("ira").await;

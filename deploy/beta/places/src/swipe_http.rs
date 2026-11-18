@@ -52,7 +52,7 @@ pub(crate) async fn serve(db:&Writer,delivery:&Delivery,profile:Arc<ProfileRules
                                 let target_email:&str=target_row.get(0); let target_lang:&str=target_row.get(1);
                                 if matched && !was_match {
                                     tx.execute("UPDATE notifications SET \"read\"=1
-                                        WHERE kind='like' AND \"read\"=0 AND ((user_id=$1 AND from_id=$2) OR (user_id=$2 AND from_id=$1))",
+                                        WHERE kind='like' AND \"read\"=0 AND ((user_id=$1::bigint AND from_id=$2::bigint) OR (user_id=$2::bigint AND from_id=$1::bigint))",
                                         &pair).await?;
                                 }
                                 let mut push=None;

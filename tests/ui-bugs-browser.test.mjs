@@ -7,7 +7,13 @@ const root = new URL('../',import.meta.url);
 const fixture = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/public/styles.css"></head><body><div id="app"><div id="feature"></div></div><script type="module">
 const params=new URLSearchParams(location.search);
 const screen=params.get('screen');
+const mount=document.getElementById('feature');
 document.documentElement.dataset.view=screen;
+if(screen==='person' && params.has('tabs')){
+  document.documentElement.setAttribute('data-tabs','');
+  mount.id='person-feature-root';
+  document.getElementById('app').insertAdjacentHTML('beforeend','<nav class="tabbar" aria-label="разделы"><a href="/likes">Лайки</a></nav>');
+}
 if(params.has('thread')){document.getElementById('feature').style.cssText='display:flex;flex:1;min-height:0;flex-direction:column';}
 if(screen==='admin')document.getElementById('feature').innerHTML='<div data-admin-reply data-kind=\"ticket\" data-source=\"1\" data-action=\"/admin/replies/ticket/1\" data-csrf=\"fixture-csrf\" data-request-id=\"fixture-reply-request-1\" data-recipient=\"Заявителю: тестовый аккаунт\"></div>';
 const mod=await import('/public/dist/'+(screen==='admin'?'server-header':screen)+'.js');
@@ -17,10 +23,10 @@ const likes=[person,{id:3,name:'Лео',age:30},{hidden:true}];
 const matches=[{id:2,name:'Ада',age:29,unread:2,last_message:'Привет',last_at:1720000000}];
 if(params.has('stale'))localStorage.setItem('wiring-profile-draft-99',JSON.stringify({name:'',bio:'Старый черновик без имени'}));
 const user={name_change_available_at:params.has('locked')?Math.floor(Date.now()/1000)+86400:0,id:99,name:'Тест',age:28,plus:true,neuro:[],vibe:[],photos:[],city:'Белград'};
-const host={user,person,personFrom:'recommendations',mode:params.has('thread')?'chat':'matches',chatId:2,catalog:{report_reasons:[{id:'spam',label:'Спам'}],places:[{country:'Сербия',cities:['Белград']},{country:'Черногория',cities:['Подгорица']}]},likes,matches,filters:{neuro:[],vibe:[],intents:[],min_age:18,max_age:99,city:''},basePath:'',matchesCount:0,
+const host={user,person,personFrom:params.has('tabs')?'likes':'recommendations',mode:params.has('thread')?'chat':'matches',chatId:2,catalog:{report_reasons:[{id:'spam',label:'Спам'}],places:[{country:'Сербия',cities:['Белград']},{country:'Черногория',cities:['Подгорица']}]},likes,matches,filters:{neuro:[],vibe:[],intents:[],min_age:18,max_age:99,city:''},basePath:'',matchesCount:0,
 hrefFor:v=>'/'+v,navigate:v=>window.test.navigation.push(v),toast:()=>{},onLogout:()=>{},onUserUpdated:()=>{},onAction:id=>window.test.actions.push(id),loadLikes:async()=>({likes}),refreshUser:async()=>user,
 api:async(path,init)=>{window.test.calls.push({path,body:init?.body});if(path.startsWith('/api/messages/'))return {peer:{id:2,name:'Ада'},messages:Array.from({length:2000},(_,i)=>({id:i+1,from_id:2,body:'Сообщение '+i,created_at:1720000000})),openers:[]};if(path==='/api/support/replies')return {replies:[{id:1,source_kind:'report',body:'Жалобу проверили. Спасибо за обращение.',created_at:1720000000}]};if(path==='/api/me'&&init?.method==='PATCH'){const data=JSON.parse(init.body);if(params.has('conflict')&&typeof data.name==='string'){const error=Error('Сменить имя можно позднее');error.payload={name_change_available_at:Math.floor(Date.now()/1000)+86400};throw error;}if(typeof data.name==='string'&&data.name!==user.name){user.name=data.name;user.name_change_available_at=Math.floor(Date.now()/1000)+14*86400;}return {user:{...user}};}if(path==='/api/swipe'){if(window.test.fail)throw Error('Локальная ошибка');if(window.test.delay)await new Promise(resolve=>window.test.resolve=resolve);return {matched:true}};return {matches,user}},swipe:async()=>{if(window.test.fail)throw Error('Скрытие не сохранилось');}};
-window.test.unmount=screen==='admin'?()=>{}:mod[{likes:'mountLikes',person:'mountPerson',profile:'mountProfile',chat:'mountChat',support:'mountSupport'}[screen]](document.getElementById('feature'),host);
+window.test.unmount=screen==='admin'?()=>{}:mod[{likes:'mountLikes',person:'mountPerson',profile:'mountProfile',chat:'mountChat',support:'mountSupport'}[screen]](mount,host);
 </script></body></html>`;
 const server=createServer(async(req,res)=>{
  const url=new URL(req.url,'http://localhost');
@@ -100,6 +106,18 @@ try{
  const backs=page.getByRole('link',{name:'назад',exact:true});
  assert.equal(await backs.count(),2);await backs.last().click();
  assert.deepEqual(await page.evaluate(()=>window.test.navigation),['recommendations']);
+ for (const width of [320, 390]) {
+  await page.setViewportSize({width,height:720});
+  await open('person','&tabs=1');
+  const layout = await page.locator('#person-feature-root').evaluate(screen => ({
+   bottom: screen.getBoundingClientRect().bottom,
+   tabTop: document.querySelector('.tabbar').getBoundingClientRect().top,
+   canScroll: screen.scrollHeight > screen.clientHeight,
+  }));
+  assert.ok(layout.canScroll && layout.bottom <= layout.tabTop, JSON.stringify(layout));
+  await backs.last().click();
+  assert.deepEqual(await page.evaluate(()=>window.test.navigation),['likes']);
+ }
  await open('person','&nojob=1');
  assert.equal(await page.getByText('Занятость',{exact:true}).count(),0);
  for (const width of [320, 375]) {
