@@ -31,7 +31,6 @@
   "2e — twice-exceptional, дважды исключительный": "2e — twice-exceptional",
   "3. Учётная запись": "3. Your account",
   "3. Чувствительные сведения": "3. Sensitive information",
-  "4. Зачем": "4. Why we process data",
   "4. Как устроены знакомства": "4. How the service works",
   "5. Основания": "5. Legal grounds",
   "6. Кому передаём": "6. Who receives data",
@@ -597,7 +596,6 @@
   "Мужчины": "Men",
   "Мурманск": "Murmansk",
   "Мы автоматически добавим выбранную особенность в твой профиль.": "We will automatically add this trait to your profile.",
-  "Мы вправе, но не обязаны, просматривать анкеты, фото и сообщения. Жалобу на участника можно отправить из интерфейса сервиса или через": "We may review profiles, photos and messages, but are not obliged to. You can report a member through the service interface or through",
   "Мы не проводим проверку биографии и судимости. Перед встречей оценивайте ситуацию сами и не передавайте незнакомым людям данные, которыми можно воспользоваться вам во вред.": "We do not conduct background or criminal record checks. Assess the situation before meeting and do not give strangers information they could use to harm you.",
   "Мы не продаём анкеты рекламным сетям и не передаём в аналитику имя, почту, фото, диагнозы и текст переписки.": "We do not sell profiles to advertising networks or send names, emails, photos, diagnoses or messages to analytics services.",
   "Мы нейроотличные люди и делаем проект для таких же, как мы. Создаём пространство для свободного и комфортного общения.": "We are neurodivergent people building this project for people like us. A space for comfortable, open connection.",
@@ -2314,5 +2312,8 @@
   "своя проводка": "wired differently",
   "Как поставить": "How to install",
   "Необязательно. AppMetrica (Яндекс) получает сведения об устройстве, сессиях, регистрации и отправке сообщений. Имя, почта, анкета и переписка не передаются. Геолокация и рекламные идентификаторы отключены. Отозвать согласие можно здесь или в разделе «Согласия».": "Optional. AppMetrica (Yandex) receives device, session, registration and message sending statistics. Names, emails, profiles and messages are not sent. Location and advertising identifiers are disabled. Withdraw consent here or under Consents.",
-  "Разрешить аналитику AppMetrica на этом устройстве": "Allow AppMetrica analytics on this device"
+  "Разрешить аналитику AppMetrica на этом устройстве": "Allow AppMetrica analytics on this device",
+  "Мы вправе, но не обязаны, просматривать анкеты и фото. Жалобу на участника можно отправить из интерфейса сервиса или через": "We may review profiles and photos, but are not obliged to. You can report a member through the service interface or through",
+  "4. Цели сервиса": "4. Service goals",
+  "Цель WIRING — помогать нейроотличным людям от 18 лет находить знакомства, дружбу и отношения, учитывая свои особенности и предпочтения в общении. Для работы сервиса мы обрабатываем данные, чтобы:": "WIRING aims to help neurodivergent adults aged 18 and over meet people, build friendships and find relationships, taking their individual traits and communication preferences into account. To run the service, we process data to:"
 }
