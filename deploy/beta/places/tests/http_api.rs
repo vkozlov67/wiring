@@ -236,6 +236,22 @@ async fn replying_to_an_incoming_like_creates_a_match() {
     assert_eq!(reply["matched"], true);
     assert_eq!(reply["match"]["id"], sender);
     assert_eq!(notice_read().await, 1);
+
+    // A new match has no messages or read marker yet. Opening it must still work.
+    let path = format!("/api/messages/{sender}?limit=50");
+    let empty = json_response(api.get(&path).header(header::COOKIE, &recipient_cookie), 200).await;
+    assert_eq!(empty["messages"], json!([]));
+    assert_eq!(empty["peer"]["id"], sender);
+    assert!(!empty["openers"].as_array().unwrap().is_empty());
+    let native = api.native("gleb").await;
+    let cached = json_response(api.get(&path).bearer_auth(native["access_token"].as_str().unwrap()), 200).await;
+    assert_eq!(cached["openers"], empty["openers"]);
+    let first_message = json_response(api.post("/api/messages", json!({
+        "to_id":sender,"body":"First message in a new match","client_id":"new-match-first-message"
+    })).header(header::COOKIE, &recipient_cookie), 200).await;
+    let received = json_response(api.get(&format!("/api/messages/{recipient}?limit=50"))
+        .header(header::COOKIE, &sender_cookie), 200).await;
+    assert_eq!(received["messages"][0]["id"], first_message["id"]);
 }
 
 #[tokio::test]
@@ -255,6 +271,14 @@ async fn feed_recovers_prefetched_cards_until_viewed() {
     assert!(recovered.iter().any(|card| card["id"] == prefetched));
     let skipped = json_response(feed(&format!("limit=30&skip={prefetched}")), 200).await;
     assert!(!skipped["cards"].as_array().unwrap().iter().any(|card| card["id"] == prefetched));
+
+    let native = api.native("ira").await;
+    let hidden = json_response(api.post("/api/swipe", json!({
+        "target_id":prefetched,"direction":"pass"
+    })).bearer_auth(native["access_token"].as_str().unwrap()), 200).await;
+    assert_eq!(hidden["matched"], false);
+    let after_hiding = json_response(feed("limit=30"), 200).await;
+    assert!(!after_hiding["cards"].as_array().unwrap().iter().any(|card| card["id"] == prefetched));
 }
 
 #[tokio::test]

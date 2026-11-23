@@ -24,7 +24,7 @@ const matches=[{id:2,name:'Ада',age:29,unread:2,last_message:'Привет',l
 if(params.has('stale'))localStorage.setItem('wiring-profile-draft-99',JSON.stringify({name:'',bio:'Старый черновик без имени'}));
 const user={name_change_available_at:params.has('locked')?Math.floor(Date.now()/1000)+86400:0,id:99,name:'Тест',age:28,plus:true,neuro:[],vibe:[],photos:[],city:'Белград'};
 const host={user,person,personFrom:params.has('tabs')?'likes':'recommendations',mode:params.has('thread')?'chat':'matches',chatId:2,catalog:{report_reasons:[{id:'spam',label:'Спам'}],places:[{country:'Сербия',cities:['Белград']},{country:'Черногория',cities:['Подгорица']}]},likes,matches,filters:{neuro:[],vibe:[],intents:[],min_age:18,max_age:99,city:''},basePath:'',matchesCount:0,
-hrefFor:v=>'/'+v,navigate:v=>window.test.navigation.push(v),toast:()=>{},onLogout:()=>{},onUserUpdated:()=>{},onAction:id=>window.test.actions.push(id),loadLikes:async()=>({likes}),refreshUser:async()=>user,
+hrefFor:v=>'/'+v,navigate:v=>window.test.navigation.push(v),toast:()=>{},onLogout:()=>{},onUserUpdated:()=>{},onThemeSelect:()=>{},onAction:id=>window.test.actions.push(id),loadLikes:async()=>({likes}),refreshUser:async()=>user,
 api:async(path,init)=>{window.test.calls.push({path,body:init?.body});if(path.startsWith('/api/messages/'))return {peer:{id:2,name:'Ада'},messages:Array.from({length:2000},(_,i)=>({id:i+1,from_id:2,body:'Сообщение '+i,created_at:1720000000})),openers:[]};if(path==='/api/support/replies')return {replies:[{id:1,source_kind:'report',body:'Жалобу проверили. Спасибо за обращение.',created_at:1720000000}]};if(path==='/api/me'&&init?.method==='PATCH'){const data=JSON.parse(init.body);if(params.has('conflict')&&typeof data.name==='string'){const error=Error('Сменить имя можно позднее');error.payload={name_change_available_at:Math.floor(Date.now()/1000)+86400};throw error;}if(typeof data.name==='string'&&data.name!==user.name){user.name=data.name;user.name_change_available_at=Math.floor(Date.now()/1000)+14*86400;}return {user:{...user}};}if(path==='/api/swipe'){if(window.test.fail)throw Error('Локальная ошибка');if(window.test.delay)await new Promise(resolve=>window.test.resolve=resolve);return {matched:true}};return {matches,user}},swipe:async()=>{if(window.test.fail)throw Error('Скрытие не сохранилось');}};
 window.test.unmount=screen==='admin'?()=>{}:mod[{likes:'mountLikes',person:'mountPerson',profile:'mountProfile',chat:'mountChat',support:'mountSupport'}[screen]](mount,host);
 </script></body></html>`;
@@ -128,8 +128,10 @@ try{
    const language = page.getByRole('button',{name:'Язык / Language',exact:true});
    const titleBox = await title.boundingBox();
    const languageBox = await language.boundingBox();
-   assert.ok(titleBox && languageBox && titleBox.x + titleBox.width <= languageBox.x,
-    `${screen} title must stay clear of language control at ${width}px`);
+   assert.ok(titleBox && languageBox && titleBox.y >= languageBox.y + languageBox.height,
+    `${screen} title must sit below the controls at ${width}px`);
+   assert.ok(await title.evaluate(element => element.scrollWidth <= element.clientWidth),
+    `${screen} title must fit at ${width}px`);
   }
  }
  await page.setViewportSize({width:390,height:844});

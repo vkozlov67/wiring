@@ -129,12 +129,14 @@
   border-radius: 14px;
   padding: 5px;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 4px;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.16), 0 2px 6px rgba(0, 0, 0, 0.06);
   z-index: 9999;
   outline: none;
+  overflow-x: hidden;
   overflow-y: auto;
-  overscroll-behavior: contain;
+  overscroll-behavior: none contain;
 }
 
 .menu.inlineMenu {

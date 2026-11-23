@@ -1,11 +1,11 @@
-use std::{env, error::Error, fmt, time::{Duration, SystemTime, UNIX_EPOCH}};
+use std::{collections::HashSet, env, error::Error, fmt, time::{Duration, SystemTime, UNIX_EPOCH}};
 
 use pbkdf2::sha2::{Digest, Sha256};
 use serde_json::{Value, json};
 use tokio::time::{Instant, sleep_until};
 use tokio_postgres::{Client, NoTls};
 
-#[derive(Debug)]
+#[derive(Debug, Eq, Hash, PartialEq)]
 enum Failure { Transport, Http(u16), Contract }
 
 impl fmt::Display for Failure {
@@ -117,8 +117,11 @@ async fn batch(db: &Client, sender: &mut SendPulse, now: i64) -> Result<(u64,u64
         AND LOWER(u.email) NOT LIKE '%@wiring.test' AND LOWER(u.email) NOT LIKE '%@deleted.wiring'
         AND LOWER(u.email)<>'demo@wiring.app' AND s.synced_at IS NULL AND COALESCE(s.retry_at,0)<=$2::bigint
         ORDER BY u.id LIMIT 25", &[&book,&now]).await?;
-    if !rows.is_empty() { sender.validate().await?; }
+    if !rows.is_empty() {
+        sender.validate().await.map_err(|error| format!("SendPulse address book validation failed: {error}"))?;
+    }
     let (mut added,mut existing,mut failed) = (0,0,0);
+    let mut reported_failures = HashSet::new();
     for row in rows {
         let uid: i64 = row.get(0);
         let email: &str = row.get(1);
@@ -129,10 +132,13 @@ async fn batch(db: &Client, sender: &mut SendPulse, now: i64) -> Result<(u64,u64
         let email_key: String = Sha256::digest(email.as_bytes()).iter().map(|b|format!("{b:02x}")).collect();
         match sender.sync(email,name).await {
             Err(error @ Failure::Http(401|403)) => return Err(error.into()),
-            Err(_) => {
+            Err(error) => {
                 db.execute("INSERT INTO sendpulse_contacts(addressbook_id,email_key,user_id,attempts,retry_at)
                     VALUES ($1,$2,$3,$4,$5) ON CONFLICT (addressbook_id,email_key) DO UPDATE
                     SET attempts=excluded.attempts,retry_at=excluded.retry_at", &[&book,&email_key,&uid,&attempts,&(now+retry_delay(attempts))]).await?;
+                if reported_failures.insert(error) {
+                    eprintln!("SendPulse contact import deferred: {error}");
+                }
                 failed+=1;
             }
             Ok(was_existing) => {

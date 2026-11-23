@@ -18,7 +18,7 @@ const user = {
 };
 const person = { ...user, bio: 'Строка один\nСтрока два', communication: 'Привет\nКак дела?', id: 2, name: 'Тестовый собеседник', neuro: ['asd', 'adhd'] };
 const catalog = {
-  places: [{ country: 'Сербия', cities: ['Белград'] }],
+  places: [{ country: 'Сербия', cities: ['Белград', ...Array.from({ length: 30 }, (_, i) => `Длинное название тестового города номер ${i + 1}`)] }],
   neuro: [{ id: 'asd', label: 'РАС (ASD)' }, { id: 'adhd', label: 'СДВГ (ADHD)' }],
   vibe: [], intents: [{ id: 'friends', label: 'дружба' }, { id: 'dating', label: 'знакомства' }], prompts: [],
   genders: [{ id: 'woman', label: 'женщина' }], looking_for: [{ id: 'everyone', label: 'всех' }], limits: { photos: 6 },
@@ -107,6 +107,32 @@ if (process.env.FIXTURE_ONLY === '1') {
     page.on('pageerror', error => errors.push(error.message));
     await page.route('**/*', route => new URL(route.request().url()).origin === origin ? route.continue() : route.abort());
     await mkdir('/tmp/wiring-trello-bugs', { recursive: true });
+
+    await page.goto(origin + '/feed');
+    await page.getByRole('button', { name: /^Фильтры/ }).click();
+    const filters = page.getByRole('dialog', { name: 'Фильтры' });
+    await filters.getByRole('button', { name: 'Страна в ленте' }).click();
+    await page.getByRole('option', { name: 'Сербия', exact: true }).click();
+    for (const width of [320, 375, 390]) {
+      await page.setViewportSize({ width, height: 730 });
+      await filters.getByRole('button', { name: 'Город в ленте' }).click();
+      const menu = filters.getByRole('listbox');
+      const geometry = await menu.evaluate(list => {
+        const bounds = list.getBoundingClientRect();
+        const search = list.querySelector('input').getBoundingClientRect();
+        list.scrollTop = 120;
+        list.scrollLeft = 120;
+        return {
+          searchFits: search.left >= bounds.left && search.right <= bounds.right,
+          horizontalOverflow: list.scrollWidth - list.clientWidth,
+          x: list.scrollLeft,
+          y: list.scrollTop,
+        };
+      });
+      assert.deepEqual(geometry, { searchFits: true, horizontalOverflow: 0, x: 0, y: 120 }, `city menu at ${width}px`);
+      await filters.getByRole('button', { name: 'Город в ленте' }).click();
+    }
+    await page.setViewportSize({ width: 390, height: 844 });
 
     await page.goto(origin + '/for-you');
     await page.getByRole('region', { name: 'Почему может подойти' }).waitFor();
@@ -215,7 +241,7 @@ if (process.env.FIXTURE_ONLY === '1') {
     assert.ok(await gap() < 3, 'sending from history returns to the newest message');
     await page.screenshot({ path: '/tmp/wiring-trello-bugs/chat-latest.png' });
     assert.deepEqual(errors, []);
-    console.log('Trello regressions passed: saved diagnoses refresh recommendations; crop buttons visible at 390x844, 320x480, 844x390; line breaks, chat copy, late media, keyboard resizing and sending from history.');
+    console.log('Trello regressions passed: filter menus scroll vertically; recommendations refresh; crop controls, line breaks, chat copy, late media, keyboard resizing and sending from history work.');
   } finally {
     for (const resolve of heldMedia.values()) resolve();
     await browser?.close();

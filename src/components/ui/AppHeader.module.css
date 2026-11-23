@@ -453,6 +453,27 @@
 .language > span { position: absolute; top: 100%; right: 0; max-width: 280px; background: var(--bg); color: var(--ink); padding: 8px; font-size: 13px; }
 .language button { min-height: 40px; padding-inline: 8px; }
 
+@media (max-width: 390px) {
+  .header:not(.center, .right) .inner:has(.headerStart):has(.brandSection):has(.headerEnd) {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    row-gap: 4px;
+  }
+  .header:not(.center, .right) .inner:has(.headerStart):has(.brandSection):has(.headerEnd) .brandGroup {
+    display: contents;
+  }
+  .header:not(.center, .right) .inner:has(.headerStart):has(.brandSection):has(.headerEnd) .brandDivider {
+    display: none;
+  }
+  .header:not(.center, .right) .inner:has(.headerStart):has(.brandSection):has(.headerEnd) .brandSection {
+    grid-area: 2 / 1 / auto / -1;
+    max-width: none;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    line-height: 1.2;
+  }
+}
+
 @media (max-width: 380px) {
   .inner { gap: 6px; }
   .headerEnd { gap: 5px; }
