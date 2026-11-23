@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 use tokio::time::{Instant, sleep_until};
 use tokio_postgres::{Client, NoTls};
 
-#[derive(Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum Failure { Transport, Http(u16), Contract }
 
 impl fmt::Display for Failure {
