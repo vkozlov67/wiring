@@ -138,11 +138,21 @@ async fn register_verify_and_reset_without_external_mail() {
     let mut fields = json!({"name":"Rust Fixture","email":email,"password":"new-local-password","age_confirm":true});
     expect(api.post("/api/register", fields.clone()), 400).await;
     fields["privacy_confirm"] = true.into();
+    let without_consent = "registration-no-marketing@wiring.test";
+    fields["email"] = without_consent.into();
+    assert_eq!(json_response(api.post("/api/register", fields.clone()), 200).await["needs_email_verify"], true);
+    assert!(db.query_one("SELECT marketing_consent_at IS NULL FROM users WHERE email=$1", &[&without_consent])
+        .await.unwrap().get::<_, bool>(0));
+
+    fields["email"] = email.into();
+    fields["marketing_consent"] = true.into();
     assert_eq!(json_response(api.post("/api/register", fields.clone()), 200).await["needs_email_verify"], true);
     expect(api.post("/api/register", fields), 409).await;
     let token: String = db.query_one("SELECT v.token FROM email_verifications v JOIN users u ON u.id=v.user_id WHERE u.email=$1", &[&email]).await.unwrap().get(0);
     let verified = expect(api.post("/api/email/verify", json!({"token":token})), 200).await;
     assert!(!session(&verified).is_empty());
+    assert!(db.query_one("SELECT marketing_consent_at > 0 AND email_verified_at > 0 FROM users WHERE email=$1", &[&email])
+        .await.unwrap().get::<_, bool>(0));
     expect(api.post("/api/email/verify", json!({"token":token})), 400).await;
     expect(api.post("/api/password/forgot", json!({"email":email})), 200).await;
     let reset: String = db.query_one("SELECT p.token FROM password_resets p JOIN users u ON u.id=p.user_id WHERE u.email=$1", &[&email]).await.unwrap().get(0);

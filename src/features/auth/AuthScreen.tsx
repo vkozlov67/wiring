@@ -1,7 +1,7 @@
 import { tr } from "@/lib/i18n";
 import { useState, useEffect, useRef } from "preact/hooks";
 import type { JSX } from "preact";
-import { Button, Input, LegalFooter } from "@/components/ui";
+import { Button, Checkbox, Input, LegalFooter } from "@/components/ui";
 import type { AuthHostBridge } from "@/features/auth/types";
 import { getErrorMessage } from "@/lib/get-error-message";
 import { registrationCreated } from "@/app/registration-analytics";
@@ -28,6 +28,7 @@ export function AuthScreen({ host }: AuthScreenProps) {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [marketingConsent, setMarketingConsent] = useState(false);
 
   // Validation & Server state
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
@@ -139,6 +140,7 @@ export function AuthScreen({ host }: AuthScreenProps) {
           password,
           age_confirm: true,
           privacy_confirm: true,
+          marketing_consent: marketingConsent,
         };
         const ref = host.getReferralCode();
         if (ref) body.ref = ref;
@@ -499,6 +501,12 @@ export function AuthScreen({ host }: AuthScreenProps) {
               )}
             </div>
           </div>
+        )}
+
+        {isRegister && (
+          <Checkbox name="marketing_consent" checked={marketingConsent} disabled={busy} onChange={setMarketingConsent}>
+            {tr("Получать новости и предложения WIRING по почте")}
+          </Checkbox>
         )}
 
         <div class={styles.submitArea}>
